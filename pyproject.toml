@@ -1,0 +1,32 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stillworks"
+version = "0.1.0"
+description = "Prove your code still works after AI (or anyone) edits it — record real behavior, replay it after changes. Zero dependencies."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [{ name = "stillworks contributors" }]
+keywords = [
+  "testing", "characterization-tests", "golden-tests", "regression",
+  "ai-generated-code", "verification", "refactoring", "mcp", "coding-agents",
+]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Topic :: Software Development :: Testing",
+]
+
+[project.scripts]
+stillworks = "stillworks.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/stillworks/stillworks"
+
+[tool.setuptools]
+packages = ["stillworks"]
