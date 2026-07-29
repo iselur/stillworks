@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stillworks"
 version = "0.1.0"
-description = "Prove your code still works after AI (or anyone) edits it — record real behavior, replay it after changes. Zero dependencies."
+description = "Record what your code does now, catch when it changes later — behavior lock for AI-edited and legacy code. Zero dependencies."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -26,7 +26,9 @@ classifiers = [
 stillworks = "stillworks.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/stillworks/stillworks"
+# NOTE: github.com/stillworks is an unrelated existing org — publish under
+# your own account or an available org (e.g. stillworks-py) and update this.
+Homepage = "https://github.com/stillworks-py/stillworks"
 
 [tool.setuptools]
 packages = ["stillworks"]

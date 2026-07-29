@@ -42,9 +42,9 @@ Skip it for brand-new code with no existing behavior to preserve.
      stillworks lock path/to/module.py --run scripts/real_usage.py
      ```
 
-   - Confirm the lock output: `locked N records`. If it captured 0 or very
-     few records, add `--cmd` probes before proceeding — a thin lock proves
-     little.
+   - Confirm the lock output: `locked N records`. If N is 0, stop and add
+     `--cmd` probes before proceeding — a zero-record lock proves nothing and
+     gives false assurance.
 
 2. **Make your edits** as usual.
 
@@ -54,16 +54,18 @@ Skip it for brand-new code with no existing behavior to preserve.
    stillworks check
    ```
 
-   - Exit 0 / `STILL WORKS`: behavior preserved. Say so and show the record
-     count as evidence.
+   - Exit 0 / `STILL WORKS`: behavior preserved. Report the record count as
+     evidence ("check passed: 12 records OK").
    - Exit 1 / `CHANGED` or `GONE` lines: behavior differs. For each diff,
-     decide honestly:
-     - **Unintended** → it's a bug in your edit. Fix the code, re-run
-       `stillworks check`. Do NOT accept the change to make the gate green.
-     - **Intended** (the user asked for this behavior change) → bless it:
+     determine whether it was intended:
+     - **Unintended** → it's a bug. Fix the code, re-run `stillworks check`.
+       Do NOT accept the change to make the gate green.
+     - **Intended** (the user asked for this behavior change) → show the diff
+       to the user, confirm, then bless it:
        `stillworks accept <id>` (or `--all` if every diff is intended).
 
-4. **Report.** Attach evidence to your summary or the PR:
+4. **Report.** Before finishing your task, attach evidence to your summary or
+   the PR:
 
    ```bash
    stillworks report -o STILLWORKS-EVIDENCE.md

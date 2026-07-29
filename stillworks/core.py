@@ -93,7 +93,50 @@ def canon(value, _depth=0):
     if dataclasses.is_dataclass(value) and not isinstance(value, type):
         return {"__obj__": type(value).__name__,
                 "fields": canon(dataclasses.asdict(value), _depth + 1)}
+    if isinstance(value, _Drained):
+        return {"__iter__": [canon(v, _depth + 1) for v in value.items],
+                "truncated": value.truncated}
+    # Objects with only the default repr would all canon to the same scrubbed
+    # '<Foo object at 0x...>' and falsely compare equal; use their attributes.
+    if not isinstance(value, type) and type(value).__repr__ is object.__repr__:
+        try:
+            fields = vars(value)
+        except TypeError:
+            fields = None
+        if fields is not None:
+            return {"__obj__": type(value).__name__,
+                    "fields": canon(fields, _depth + 1)}
     return {"__repr__": safe_repr(value)}
+
+
+class _Drained:
+    """A lazy iterator's contents, materialized by run_call for comparison."""
+
+    __slots__ = ("items", "truncated")
+    _LIMIT = 200
+
+    def __init__(self, items, truncated):
+        self.items = items
+        self.truncated = truncated
+
+    def __repr__(self):
+        suffix = ", ...truncated" if self.truncated else ""
+        return "<iterator: {!r}{}>".format(self.items, suffix)
+
+
+def _is_lazy_iter(value):
+    import collections.abc
+    return isinstance(value, collections.abc.Iterator) \
+        and not isinstance(value, (str, bytes))
+
+
+def _drain(it):
+    items = []
+    for v in it:
+        items.append(v)
+        if len(items) >= _Drained._LIMIT:
+            return _Drained(items, truncated=True)
+    return _Drained(items, truncated=False)
 
 
 def canon_hash(value):
@@ -128,6 +171,11 @@ def run_call(fn, args, kwargs):
     """Call fn and normalize the outcome to a comparable dict."""
     try:
         result = fn(*args, **kwargs)
+        if _is_lazy_iter(result):
+            # Generators/iterators would all canon to the same scrubbed repr
+            # and falsely compare equal. We own this execution, so it is safe
+            # to materialize a bounded prefix and compare the actual items.
+            result = _drain(result)
     except Exception as exc:
         return {"kind": "exception", "type": type(exc).__name__,
                 "canon": canon(str(exc)), "repr": safe_repr(exc)}
@@ -224,6 +272,7 @@ class Recorder:
         self.mod = mod
         self.records = []
         self.skipped_unpicklable = 0
+        self.skipped_lazy = 0
         self._seen = set()
         self._depth = 0
         self._originals = {}
@@ -258,7 +307,12 @@ class Recorder:
                     exc = e
                     outcome = {"kind": "exception", "type": type(e).__name__,
                                "canon": canon(str(e)), "repr": safe_repr(e)}
-                if args_b64 is None:
+                if exc is None and _is_lazy_iter(result):
+                    # We must hand the iterator back to the caller unconsumed,
+                    # so there is nothing observable to record here. (Fuzz and
+                    # check own their executions and CAN materialize.)
+                    recorder.skipped_lazy += 1
+                elif args_b64 is None:
                     recorder.skipped_unpicklable += 1
                 else:
                     key = (name, canon_hash((list(args), kwargs)))
@@ -380,6 +434,11 @@ def fuzz_function(name, fn, rng, per_function):
         sig = inspect.signature(fn)
     except (TypeError, ValueError):
         return [], 0
+    # A required keyword-only param means every positional-only call we could
+    # generate raises TypeError — recording those would lock in noise.
+    for p in sig.parameters.values():
+        if p.kind == p.KEYWORD_ONLY and p.default is inspect.Parameter.empty:
+            return [], 0
     params = [p for p in sig.parameters.values()
               if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)]
     if not params:
@@ -526,11 +585,14 @@ def assign_ids(records):
 # is excluded from gating (kept, flagged, reported).
 # ---------------------------------------------------------------------------
 
-def mark_nondeterministic(records, mod):
-    fns = dict(public_functions(mod))
+def mark_nondeterministic(records, mod, project_dir=None):
+    fns = dict(public_functions(mod)) if mod is not None else {}
     for rec in records:
         if rec["kind"] == "cmd":
-            second = run_cmd(rec["cmd"], cwd=rec.get("cwd"))
+            # Replay in the project dir — the same cwd `check` will use.
+            # Anything else (e.g. the caller's cwd when --project is remote)
+            # would flag every path-dependent command as falsely nondet.
+            second = run_cmd(rec["cmd"], cwd=project_dir)
             rec["nondet"] = not cmd_outcomes_equal(rec["out"], second)
             continue
         fn = fns.get(rec["target"])
@@ -652,6 +714,11 @@ def accept(project_dir, ids=None):
     if "error" in chk:
         return chk
     by_id = {e["id"]: e for e in chk["results"]}
+    if ids:
+        unknown = sorted(set(ids) - set(by_id))
+        if unknown:
+            return {"error": "no such record id(s): {} (see `stillworks status` "
+                             "for valid ids)".format(", ".join(unknown))}
     wanted = set(ids) if ids else {
         e["id"] for e in chk["results"] if e["status"] in ("CHANGED", "GONE")}
     accepted, removed = [], []

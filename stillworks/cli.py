@@ -35,8 +35,12 @@ def cmd_lock(args):
 
     if not args.target and not args.cmd:
         return _err("nothing to lock — give a TARGET module/file, or --cmd")
-    if (args.run or args.fuzz) and not args.target:
-        return _err("--run/--fuzz need a TARGET module or file")
+    if args.run and not args.target:
+        return _err("--run needs a TARGET module or file to record calls into, "
+                    "e.g.: stillworks lock src/mod.py --run scripts/daily.py")
+    if args.fuzz and not args.target:
+        return _err("--fuzz needs a TARGET module or file, "
+                    "e.g.: stillworks lock src/mod.py --fuzz 8")
 
     if args.target:
         try:
@@ -67,10 +71,19 @@ def cmd_lock(args):
     if args.fuzz and mod is not None:
         rng = random.Random(args.seed)
         per_fn = max(1, args.fuzz)
+        fuzz_empty = []
         for name, fn in core.public_functions(mod):
             recs, sk = core.fuzz_function(name, fn, rng, per_fn)
+            if not recs:
+                fuzz_empty.append(name)
             records.extend(recs)
             skipped += sk
+        if fuzz_empty:
+            print("stillworks: could not generate inputs for: {}\n"
+                  "  (--fuzz needs positional parameters annotated with "
+                  "int/float/str/bool/list/dict\n   and no required "
+                  "keyword-only parameters — capture these with --run or --cmd)"
+                  .format(", ".join(fuzz_empty)), file=sys.stderr)
 
     for c in (args.cmd or []):
         out = core.run_cmd(c, cwd=project)
@@ -87,13 +100,18 @@ def cmd_lock(args):
         records = records[:args.max]
 
     core.assign_ids(records)
-    if mod is not None or any(r["kind"] == "cmd" for r in records):
-        # Determinism guard: replay each record once; flag flaky ones.
-        core.mark_nondeterministic(records, mod) if mod is not None else None
-        if mod is None:
-            for r in records:
-                second = core.run_cmd(r["cmd"], cwd=project)
-                r["nondet"] = not core.cmd_outcomes_equal(r["out"], second)
+    # Determinism guard: replay each record once; flag flaky ones.
+    core.mark_nondeterministic(records, mod, project)
+
+    existing = core.load_lock(project)
+    if existing is not None:
+        n_hist = len(existing.get("history") or [])
+        print("stillworks: replacing existing lockfile ({} records{})\n"
+              "  (to capture several modes in one baseline, combine them in a "
+              "single lock command)".format(
+                  len(existing.get("records") or []),
+                  ", {} accepted changes".format(n_hist) if n_hist else ""),
+              file=sys.stderr)
 
     lock = core.new_lock(module_info, args.seed)
     lock["records"] = records
@@ -128,8 +146,15 @@ def cmd_check(args):
             if e["status"] == "CHANGED":
                 if e["kind"] == "call":
                     print("         args: {}".format(e.get("args", "")))
-                    print("         was:  {}".format(e["was"].get("repr", e["was"])))
-                    print("         now:  {}".format(e["now"].get("repr", e["now"])))
+                    w = e["was"].get("repr", e["was"])
+                    n = e["now"].get("repr", e["now"])
+                    if w == n:
+                        # reprs identical (e.g. address-scrubbed objects) —
+                        # the difference lives in the canonical projection
+                        w = json.dumps(e["was"].get("canon"), sort_keys=True, default=str)
+                        n = json.dumps(e["now"].get("canon"), sort_keys=True, default=str)
+                    print("         was:  {}".format(_head(w, 400)))
+                    print("         now:  {}".format(_head(n, 400)))
                 else:
                     _print_cmd_diff(e)
             elif "note" in e:
@@ -142,14 +167,26 @@ def cmd_check(args):
 
 
 def _print_cmd_diff(e):
+    import difflib
     was, now = e["was"], e["now"]
     if was.get("exit") != now.get("exit"):
         print("         exit: {} -> {}".format(was.get("exit"), now.get("exit")))
     for stream in ("stdout", "stderr"):
-        if was.get(stream) != now.get(stream):
-            print("         {} changed:".format(stream))
-            print("           was: {!r}".format(_head(was.get(stream, ""))))
-            print("           now: {!r}".format(_head(now.get(stream, ""))))
+        w, n = was.get(stream, ""), now.get(stream, "")
+        if w == n:
+            continue
+        print("         {} changed:".format(stream))
+        if "\n" in w or "\n" in n:
+            diff = difflib.unified_diff(w.splitlines(), n.splitlines(),
+                                        "was", "now", lineterm="")
+            for i, line in enumerate(diff):
+                if i >= 40:
+                    print("           ...diff truncated...")
+                    break
+                print("           {}".format(line))
+        else:
+            print("           was: {!r}".format(_head(w)))
+            print("           now: {!r}".format(_head(n)))
 
 
 def _head(text, n=200):
@@ -215,13 +252,19 @@ def cmd_mcp(args):
 def build_parser():
     p = argparse.ArgumentParser(
         prog="stillworks",
-        description="Prove code still works: record real behavior, "
-                    "verify it after changes.")
+        description="Record what your code does now, catch when it "
+                    "changes later.")
     p.add_argument("--project", default=".", help="project directory "
                    "(default: current directory)")
+    # Also accepted after the subcommand (`stillworks check --project X`);
+    # SUPPRESS keeps the sub-level flag from clobbering the global default.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--project", default=argparse.SUPPRESS,
+                        help=argparse.SUPPRESS)
     sub = p.add_subparsers(dest="command")
 
-    sp = sub.add_parser("lock", help="record current behavior as the baseline")
+    sp = sub.add_parser("lock", parents=[common],
+                        help="record current behavior as the baseline")
     sp.add_argument("target", nargs="?", help="module name (pkg.mod) or file (src/mod.py)")
     sp.add_argument("--run", metavar="SCRIPT", help="run this script and record "
                     "every call into TARGET's public functions")
@@ -235,20 +278,20 @@ def build_parser():
     sp.add_argument("script_args", nargs="*", help="arguments passed to --run script")
     sp.set_defaults(func=cmd_lock)
 
-    sp = sub.add_parser("check", help="replay the baseline against current code")
+    sp = sub.add_parser("check", parents=[common], help="replay the baseline against current code")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp.set_defaults(func=cmd_check)
 
-    sp = sub.add_parser("accept", help="bless intentional behavior changes")
+    sp = sub.add_parser("accept", parents=[common], help="bless intentional behavior changes")
     sp.add_argument("ids", nargs="*", help="record ids to accept")
     sp.add_argument("--all", action="store_true", help="accept every change")
     sp.set_defaults(func=cmd_accept)
 
-    sp = sub.add_parser("report", help="write a markdown evidence report")
+    sp = sub.add_parser("report", parents=[common], help="write a markdown evidence report")
     sp.add_argument("-o", "--output", help="output file (default: stdout)")
     sp.set_defaults(func=cmd_report)
 
-    sp = sub.add_parser("status", help="show lockfile summary")
+    sp = sub.add_parser("status", parents=[common], help="show lockfile summary")
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("mcp", help="serve the MCP interface on stdio")

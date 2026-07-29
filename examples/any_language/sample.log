@@ -1,0 +1,21 @@
+2024-03-01 08:00:01 INFO  server started on port 8080
+2024-03-01 08:00:02 INFO  loaded config from /etc/app/config.toml
+2024-03-01 08:00:15 INFO  worker pool ready (4 workers)
+2024-03-01 08:01:03 INFO  request accepted: GET /api/status
+2024-03-01 08:01:04 INFO  request accepted: GET /api/status
+2024-03-01 08:01:10 WARN  disk at 80% capacity
+2024-03-01 08:01:22 INFO  request accepted: POST /api/order
+2024-03-01 08:01:23 INFO  order 10041 created
+2024-03-01 08:02:00 INFO  request accepted: GET /api/status
+2024-03-01 08:02:05 ERROR connection refused: db host=db01 port=5432
+2024-03-01 08:02:06 ERROR connection refused: db host=db01 port=5432
+2024-03-01 08:02:07 ERROR connection refused: db host=db01 port=5432
+2024-03-01 08:02:10 WARN  retrying db connection (attempt 1/5)
+2024-03-01 08:02:12 WARN  retrying db connection (attempt 2/5)
+2024-03-01 08:02:15 INFO  db reconnected
+2024-03-01 08:03:00 INFO  request accepted: GET /api/status
+2024-03-01 08:03:11 INFO  request accepted: GET /api/orders
+2024-03-01 08:03:12 INFO  order 10042 created
+2024-03-01 08:04:00 INFO  request accepted: GET /api/status
+2024-03-01 08:04:30 WARN  disk at 80% capacity
+2024-03-01 08:05:00 INFO  request accepted: GET /api/status
