@@ -11,7 +11,7 @@ agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
 that can run a shell command). Python ≥ 3.9, stdlib only, MIT license.
 
 ```bash
-pip install stillworks
+pip install git+https://github.com/iselur/stillworks
 
 stillworks lock src/pricing.py --fuzz 8   # before: record real behavior
 # ... let your AI agent refactor pricing.py ...
@@ -152,6 +152,17 @@ coding agent, or a human mid-refactor, can use in thirty seconds.
 Not a test framework (no assertions to write), not a security scanner, not an
 LLM product (it never calls a model, needs no API key, sends nothing anywhere).
 It does one thing: **catch behavior changes you didn't intend.**
+
+## Part of a small family
+
+Four tools for working with coding agents, same house style: zero dependencies,
+MIT, no API key, nothing leaves your machine. None of them call a model — that is
+the point, since the thing being checked already is one.
+
+- [stillworks](https://github.com/iselur/stillworks) — record what your code does now, catch when it changes later  ← you are here
+- [agentdiff](https://github.com/iselur/agentdiff) — see what the agent actually changed, before you merge
+- [agentlog](https://github.com/iselur/agentlog) — what did your coding agent actually do today?
+- [unedit](https://github.com/iselur/unedit) — a safety net for letting an agent loose on your files
 
 ## License
 
