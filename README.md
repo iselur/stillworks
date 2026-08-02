@@ -106,7 +106,7 @@ No pip available (managed environments, PEP 668)? It's stdlib-only, so a
 checkout works as-is:
 
 ```bash
-git clone <repo-url> && PYTHONPATH=stillworks python3 -m stillworks --help
+git clone https://github.com/iselur/stillworks && PYTHONPATH=stillworks python3 -m stillworks --help
 # or: pipx install stillworks
 ```
 

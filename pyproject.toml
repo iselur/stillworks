@@ -26,9 +26,7 @@ classifiers = [
 stillworks = "stillworks.cli:main"
 
 [project.urls]
-# NOTE: github.com/stillworks is an unrelated existing org — publish under
-# your own account or an available org (e.g. stillworks-py) and update this.
-Homepage = "https://github.com/stillworks-py/stillworks"
+Homepage = "https://github.com/iselur/stillworks"
 
 [tool.setuptools]
 packages = ["stillworks"]
