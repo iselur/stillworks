@@ -18,7 +18,7 @@ agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
 that can run a shell command). Python ≥ 3.9, stdlib only, MIT license.
 
 ```bash
-pip install git+https://github.com/iselur/stillworks
+pip install stillworks
 
 stillworks lock src/pricing.py --fuzz 8   # before: record real behavior
 # ... let your AI agent refactor pricing.py ...
