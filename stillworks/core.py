@@ -502,10 +502,27 @@ def fuzz_function(name, fn, rng, per_function):
 # stdout, stderr of a shell command; replay by running it again.
 # ---------------------------------------------------------------------------
 
-def run_cmd(cmd, cwd=None, timeout=120):
+DEFAULT_CMD_TIMEOUT = 120
+
+
+def run_cmd(cmd, cwd=None, timeout=DEFAULT_CMD_TIMEOUT):
+    """Record one command's exit code, stdout and stderr.
+
+    Every way a command can fail to even start is recorded as a result rather
+    than raised: a baseline that captures "this command does not exist here" is
+    more useful than a stack trace, and it stays comparable on the next run.
+    """
+    try:
+        argv = shlex.split(cmd or "")
+    except ValueError as exc:
+        return {"exit": -1, "stdout": "",
+                "stderr": "<stillworks: cannot read command: {}>".format(exc)}
+    if not argv:
+        return {"exit": -1, "stdout": "",
+                "stderr": "<stillworks: empty command>"}
     try:
         proc = subprocess.run(
-            shlex.split(cmd), cwd=cwd, capture_output=True, text=True,
+            argv, cwd=cwd, capture_output=True, text=True,
             timeout=timeout,
         )
         return {"exit": proc.returncode,
@@ -513,7 +530,7 @@ def run_cmd(cmd, cwd=None, timeout=120):
                 "stderr": _scrub_output(proc.stderr)}
     except subprocess.TimeoutExpired:
         return {"exit": -1, "stdout": "", "stderr": "<stillworks: timeout after {}s>".format(timeout)}
-    except FileNotFoundError as exc:
+    except (FileNotFoundError, NotADirectoryError, PermissionError, OSError) as exc:
         return {"exit": -1, "stdout": "", "stderr": "<stillworks: {}>".format(exc)}
 
 
@@ -548,14 +565,27 @@ def load_lock(project_dir):
 
 
 def save_lock(project_dir, lock):
+    """Write the lockfile, atomically.
+
+    Raises OSError if the project directory will not take it — a read-only CI
+    checkout is a normal thing to be pointed at, and the caller turns that into
+    a sentence rather than a traceback.
+    """
     d = os.path.join(project_dir, LOCK_DIR)
     os.makedirs(d, exist_ok=True)
     path = lock_path(project_dir)
     tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(lock, f, indent=1, sort_keys=False, default=str)
-        f.write("\n")
-    os.replace(tmp, path)
+    try:
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(lock, f, indent=1, sort_keys=False, default=str)
+            f.write("\n")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)      # never leave a half-written .tmp behind
+        except OSError:
+            pass
+        raise
 
 
 def new_lock(module_info, seed):

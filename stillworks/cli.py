@@ -28,6 +28,10 @@ def _err(msg):
 
 def cmd_lock(args):
     project = os.path.abspath(args.project)
+    if getattr(args, "timeout", None) is not None and args.timeout <= 0:
+        return _err("--timeout must be greater than zero (got {})".format(args.timeout))
+    if os.path.exists(project) and not os.path.isdir(project):
+        return _err("--project must be a directory, and {} is a file".format(project))
     records = []
     module_info = None
     mod = None
@@ -85,8 +89,9 @@ def cmd_lock(args):
                   "keyword-only parameters — capture these with --run or --cmd)"
                   .format(", ".join(fuzz_empty)), file=sys.stderr)
 
+    timeout = getattr(args, "timeout", None) or core.DEFAULT_CMD_TIMEOUT
     for c in (args.cmd or []):
-        out = core.run_cmd(c, cwd=project)
+        out = core.run_cmd(c, cwd=project, timeout=timeout)
         records.append({"kind": "cmd", "cmd": c, "out": out, "source": "cmd"})
 
     if not records:
@@ -115,7 +120,14 @@ def cmd_lock(args):
 
     lock = core.new_lock(module_info, args.seed)
     lock["records"] = records
-    core.save_lock(project, lock)
+    try:
+        core.save_lock(project, lock)
+    except OSError as exc:
+        return _err("could not write the lockfile into {}\n"
+                    "  {}\n"
+                    "  stillworks needs to create a {} directory in the project "
+                    "it locks.".format(
+                        os.path.join(project, core.LOCK_DIR), exc, core.LOCK_DIR))
 
     n_calls = sum(1 for r in records if r["kind"] == "call")
     n_cmds = sum(1 for r in records if r["kind"] == "cmd")
@@ -281,6 +293,9 @@ def build_parser():
                     "shell command's exit/stdout/stderr (repeatable; works for "
                     "any language)")
     sp.add_argument("--seed", type=int, default=1234, help="fuzz seed (default 1234)")
+    sp.add_argument("--timeout", type=float, metavar="SECONDS",
+                    help="give up on a --cmd after this long (default {})".format(
+                        core.DEFAULT_CMD_TIMEOUT))
     sp.add_argument("--max", type=int, help="cap total records")
     sp.add_argument("script_args", nargs="*", help="arguments passed to --run script")
     sp.set_defaults(func=cmd_lock)
