@@ -2,7 +2,9 @@
 
 import io
 import os
+import shutil
 import sys
+import tempfile
 import types
 import unittest
 
@@ -80,6 +82,54 @@ class TestVersionOf(unittest.TestCase):
         src = open(os.path.join(_REPO_ROOT, "stillworks", "tools.py")).read()
         for mod in ("unedit", "agentdiff", "agentlog"):
             self.assertNotIn("import " + mod, src)
+
+
+class TestTheSiblingReportedIsTheOneInstalledWithUs(unittest.TestCase):
+    """`pip install 'stillworks[all]'` puts the siblings next to this stillworks.
+
+    PATH may well hold an older copy from a different environment — a pipx
+    install, a system package.  Reporting that one tells somebody who just
+    installed the family that they have the version they replaced.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.mkdtemp()
+        self.here = os.path.join(self.tmp, "here")
+        self.elsewhere = os.path.join(self.tmp, "elsewhere")
+        os.makedirs(self.here)
+        os.makedirs(self.elsewhere)
+        self._which = tools.shutil.which
+        self._exe = tools.sys.executable
+
+    def tearDown(self):
+        tools.shutil.which = self._which
+        tools.sys.executable = self._exe
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _script(self, directory, name, version):
+        path = os.path.join(directory, name)
+        with open(path, "w") as fh:
+            fh.write("#!{}\nprint('{} {}')\n".format(sys.executable, name, version))
+        os.chmod(path, 0o755)
+        return path
+
+    def test_the_neighbour_wins_over_the_one_on_path(self):
+        self._script(self.here, "agentdiff", "9.9.9")
+        old = self._script(self.elsewhere, "agentdiff", "0.0.1")
+        tools.sys.executable = os.path.join(self.here, "python")
+        tools.shutil.which = lambda c: old if c == "agentdiff" else None
+        self.assertEqual(tools._version_of("agentdiff"), "9.9.9")
+
+    def test_path_is_still_used_when_there_is_no_neighbour(self):
+        old = self._script(self.elsewhere, "agentdiff", "0.0.1")
+        tools.sys.executable = os.path.join(self.here, "python")
+        tools.shutil.which = lambda c: old if c == "agentdiff" else None
+        self.assertEqual(tools._version_of("agentdiff"), "0.0.1")
+
+    def test_absent_everywhere_is_still_absent(self):
+        tools.sys.executable = os.path.join(self.here, "python")
+        tools.shutil.which = lambda c: None
+        self.assertIsNone(tools._version_of("agentdiff"))
 
 
 class TestRender(unittest.TestCase):

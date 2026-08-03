@@ -9,6 +9,7 @@ is also what the user would do by hand.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,24 @@ FAMILY: List[Tuple[str, str, str]] = [
 _TIMEOUT_S = 5
 
 
+def _neighbour(command: str) -> Optional[str]:
+    """The sibling installed beside this stillworks, if there is one.
+
+    `pip install 'stillworks[all]'` puts all four in one environment, so the
+    copy next to our own interpreter is the copy that install produced.  PATH
+    may well hold an older one from somewhere else — a pipx install, a system
+    package — and reporting that tells somebody who just installed the family
+    that they still have the version they replaced.
+    """
+    bindir = os.path.dirname(os.path.abspath(sys.executable or ""))
+    if not bindir:
+        return None
+    candidate = os.path.join(bindir, command)
+    if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    return None
+
+
 def _version_of(command: str) -> Optional[str]:
     """The installed version of a sibling command, or None if it is absent.
 
@@ -45,7 +64,7 @@ def _version_of(command: str) -> Optional[str]:
         # We are stillworks.  Reporting the running version is both cheaper and
         # more honest than shelling out to whichever copy PATH happens to find.
         return __version__
-    path = shutil.which(command)
+    path = _neighbour(command) or shutil.which(command)
     if not path:
         return None
     try:
