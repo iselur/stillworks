@@ -18,7 +18,8 @@ agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
 that can run a shell command). Python ≥ 3.9, stdlib only, MIT license.
 
 ```bash
-pip install stillworks
+pip install 'stillworks[all]'   # all four agent tools (see below)
+pip install stillworks          # or just this one, zero dependencies
 
 stillworks lock src/pricing.py --fuzz 8   # before: record real behavior
 # ... let your AI agent refactor pricing.py ...
@@ -113,6 +114,25 @@ trust the merge. (`report` without `-o` prints to stdout.) All commands take
 { "mcpServers": { "stillworks": { "command": "stillworks", "args": ["mcp"] } } }
 ```
 
+## What else is installed
+
+```
+$ stillworks tools
+  stillworks  0.1.1  record what your code does now, catch when it changes
+  unedit      0.1.1  a safety net for letting an agent loose on your files
+  agentdiff   —      see what the agent actually changed, before you merge
+  agentlog    0.2.0  what did your coding agent actually do today?
+
+  missing: agentdiff
+  install:  pip install agentdiff-cli
+  or all four:  pip install 'stillworks[all]'
+```
+
+It finds the others on your PATH and asks each for its version — it never
+imports them, so the extra stays genuinely optional and each tool keeps its own
+release cycle. Always exits 0; it reports, it does not judge. `--json` for
+scripts.
+
 No pip available (managed environments, PEP 668)? It's stdlib-only, so a
 checkout works as-is:
 
@@ -181,6 +201,13 @@ the point, since the thing being checked already is one.
 - [agentdiff](https://github.com/iselur/agentdiff) — see what the agent actually changed, before you merge
 - [agentlog](https://github.com/iselur/agentlog) — what did your coding agent actually do today?
 - [unedit](https://github.com/iselur/unedit) — a safety net for letting an agent loose on your files
+
+One install gets all four, and `stillworks tools` says which ones you have:
+
+```sh
+pip install 'stillworks[all]'
+stillworks tools
+```
 
 ## License
 

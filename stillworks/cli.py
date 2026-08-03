@@ -18,7 +18,7 @@ import random
 import runpy
 import sys
 
-from . import core
+from . import __version__, core
 
 
 def _err(msg):
@@ -249,11 +249,18 @@ def cmd_mcp(args):
     return mcp_server.serve()
 
 
+def cmd_tools(args):
+    from .tools import cmd_tools as _tools
+    return _tools(args)
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="stillworks",
         description="Record what your code does now, catch when it "
                     "changes later.")
+    p.add_argument("--version", action="version",
+                   version="stillworks {}".format(__version__))
     p.add_argument("--project", default=".", help="project directory "
                    "(default: current directory)")
     # Also accepted after the subcommand (`stillworks check --project X`);
@@ -296,6 +303,10 @@ def build_parser():
 
     sp = sub.add_parser("mcp", help="serve the MCP interface on stdio")
     sp.set_defaults(func=cmd_mcp)
+
+    sp = sub.add_parser("tools", help="which of the four agent tools you have")
+    sp.add_argument("--json", action="store_true", help="machine-readable output")
+    sp.set_defaults(func=cmd_tools)
 
     return p
 
