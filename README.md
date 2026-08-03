@@ -1,10 +1,14 @@
 # stillworks
 
-**Record what your code does now. Catch when it changes later.**
+**Characterization testing with no test code to write.**
 
-`stillworks` records what your code *actually does* — by running it — and
-replays those recordings after changes. Same inputs, same outputs? It still
-works. Different? You see exactly what changed, before it merges.
+`stillworks` runs your code, records what it returns, and replays those
+recordings after you change it. Same inputs, same outputs? It still works.
+Different? You see exactly what changed, before it merges.
+
+It is scaffolding, not a test suite — the point is that you can put a
+behavior gate around untested code in about thirty seconds, and throw it away
+when the risky change is done.
 
 Two verbs: `lock` and `check`. Zero dependencies. Plain CLI, so **every coding
 agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
@@ -29,26 +33,32 @@ BEHAVIOR CHANGED: 24 records — 1 CHANGED, 23 OK
 Exit code `1` — the merge gate closes. If the change was intentional:
 `stillworks accept apply_discount#3`, and it becomes the new baseline.
 
-## Why not just ask your AI to write tests?
+## Should you just write tests instead?
 
-Because the agent that wrote the change **can't grade its own homework** — and
-an LLM writing tests *guesses* what the code should do. Four structural
-differences, not preferences:
+Often, yes. If you know what the code is *supposed* to do, write `pytest` —
+with `approvaltests`, `syrupy`, or `pytest-regressions` for the snapshot part.
+Real tests express intent, target boundaries, mock dependencies, and
+distinguish *changed* from *wrong*. A lockfile can't do any of that. And yes,
+an LLM can write those tests for you, and can verify them by running the code
+— that is a genuine option, not a trap.
 
-1. **Ground truth by execution.** `lock` runs your real code and records what
-   it *does*. An LLM writing tests writes what it *believes* the code does —
-   and when it hallucinates the expectation, the test passes for the wrong
-   behavior. A recording can't hallucinate.
-2. **Deterministic verdicts.** `check` executes and compares. Same code, same
-   verdict, every run, as a CI exit code. Asking a model "does this look
-   right?" gives a different answer on different days — executing the code
-   gives the same answer every time.
-3. **Independent of the agent.** The tool doesn't know which agent made the
-   change, and the agent can't talk it out of a red verdict. Judge and
-   defendant are different processes.
-4. **Disposable scaffolding.** Legacy code without tests? Lock it, do the risky
-   migration, check, delete the lockfile. No test suite to maintain forever —
-   the lockfile is scaffolding you keep only as long as the renovation runs.
+`stillworks` is for the case *before* that:
+
+- **The code has no tests and you're about to change it.** Lock it, do the
+  migration, check, delete the lockfile. Nothing to maintain afterwards.
+- **You don't yet know what it's supposed to do.** Pinning current behavior is
+  the cheapest way to find out whether your change moved something.
+- **It isn't Python, or isn't importable.** `--cmd "make report"` records exit
+  code, stdout and stderr for anything you can run.
+- **You want a gate right now.** No test framework, no fixtures, no
+  dependencies, one command, and a CI exit code.
+
+**What it does not claim.** A lockfile records what your code *did*, not what
+it *should* do — bugs get pinned along with everything else, and `check` going
+green never means "correct", only "unchanged". Running the code is available
+to a test suite and to an agent with a shell just as much as it is to
+`stillworks`; the only thing this tool really buys you is that there is no
+test code to write and no harness to keep alive.
 
 ## Three ways to capture behavior
 
@@ -115,12 +125,17 @@ git clone https://github.com/iselur/stillworks && PYTHONPATH=stillworks python3 
 The idea is **characterization testing** — Michael Feathers, *Working
 Effectively with Legacy Code* (2004): when code has no tests, record what it
 does and pin that. Snapshot-testing libraries like `approvaltests`, `syrupy`,
-and `pytest-regressions` do this well *inside a test suite you write*.
+and `pytest-regressions` do this well *inside a test suite you write*, and
+they are the better tool once that suite exists — they give you names,
+fixtures, and intent alongside the snapshots.
+
 `stillworks` differs in one deliberate way: **there is no test code to
 write**. It captures behavior from annotations, from a real script run, or
 from shell commands (any language), compares with one CLI verb, and needs no
 test framework, no server, and no dependencies — which is exactly what a
-coding agent, or a human mid-refactor, can use in thirty seconds.
+coding agent, or a human mid-refactor, can use in thirty seconds. That is a
+convenience difference, not a stronger guarantee: a snapshot test asserting
+the same recorded values is worth exactly as much.
 
 ## Honest limits (v0.1)
 
@@ -149,9 +164,11 @@ coding agent, or a human mid-refactor, can use in thirty seconds.
 
 ## What stillworks is not
 
-Not a test framework (no assertions to write), not a security scanner, not an
-LLM product (it never calls a model, needs no API key, sends nothing anywhere).
-It does one thing: **catch behavior changes you didn't intend.**
+Not a test framework and not a replacement for one — if the code is going to
+live a long time, it deserves tests that say what it *should* do. Not a
+security scanner. Not an LLM product (it never calls a model, needs no API
+key, sends nothing anywhere). It does one thing: **catch behavior changes you
+didn't intend, on code that has nothing else guarding it.**
 
 ## Part of a small family
 
