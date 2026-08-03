@@ -1,14 +1,17 @@
 # stillworks
 
-**Characterization testing with no test code to write.**
+**Take a snapshot of what your code does. After you change it, see if anything
+moved.**
 
-`stillworks` runs your code, records what it returns, and replays those
-recordings after you change it. Same inputs, same outputs? It still works.
-Different? You see exactly what changed, before it merges.
+You have to edit a file that has no tests. Afterwards, how do you know you only
+changed the thing you meant to change?
 
-It is scaffolding, not a test suite — the point is that you can put a
-behavior gate around untested code in about thirty seconds, and throw it away
-when the risky change is done.
+`stillworks lock` runs your code and writes down what it gives back.
+`stillworks check` runs it again after your edit and tells you if any answer
+is different. That's the whole idea.
+
+It's a safety net for one risky change, not a test suite you keep. Set it up in
+under a minute, delete it when you're done.
 
 Two verbs: `lock` and `check`. Zero dependencies. Plain CLI, so **every coding
 agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
@@ -35,30 +38,28 @@ Exit code `1` — the merge gate closes. If the change was intentional:
 
 ## Should you just write tests instead?
 
-Often, yes. If you know what the code is *supposed* to do, write `pytest` —
-with `approvaltests`, `syrupy`, or `pytest-regressions` for the snapshot part.
-Real tests express intent, target boundaries, mock dependencies, and
-distinguish *changed* from *wrong*. A lockfile can't do any of that. And yes,
-an LLM can write those tests for you, and can verify them by running the code
-— that is a genuine option, not a trap.
+Often, yes — and you should. A real test suite (`pytest`, plus `approvaltests`,
+`syrupy` or `pytest-regressions` for snapshots) says what the code is *meant*
+to do. That's more valuable than what it *happens* to do today, and it's worth
+keeping around. If you can write those tests, or have an AI write them for
+you — that works, and it beats this tool.
 
-`stillworks` is for the case *before* that:
+Use `stillworks` when you're not there yet:
 
-- **The code has no tests and you're about to change it.** Lock it, do the
-  migration, check, delete the lockfile. Nothing to maintain afterwards.
-- **You don't yet know what it's supposed to do.** Pinning current behavior is
-  the cheapest way to find out whether your change moved something.
-- **It isn't Python, or isn't importable.** `--cmd "make report"` records exit
-  code, stdout and stderr for anything you can run.
-- **You want a gate right now.** No test framework, no fixtures, no
-  dependencies, one command, and a CI exit code.
+- **The code has no tests and you're changing it today.** Snapshot it, make the
+  change, check, delete the snapshot. Nothing left to maintain.
+- **You don't actually know what it's supposed to do.** Nobody does; the person
+  who wrote it left. What it does now is the only thing you can hold on to.
+- **It's not Python, or you can't import it.** `--cmd "make report"` works on
+  anything you can run from a terminal.
+- **You want the check working in the next minute.** No test framework, no
+  setup, one command.
 
-**What it does not claim.** A lockfile records what your code *did*, not what
-it *should* do — bugs get pinned along with everything else, and `check` going
-green never means "correct", only "unchanged". Running the code is available
-to a test suite and to an agent with a shell just as much as it is to
-`stillworks`; the only thing this tool really buys you is that there is no
-test code to write and no harness to keep alive.
+**What it does not promise.** It records what your code *did*, not what it
+*should* do. If the code has a bug today, the snapshot keeps the bug. A green
+`check` means *nothing moved* — it never means *this is correct*. And it has no
+special magic: anything can run your code and compare, including you and
+including an AI. What you're buying here is that there's no test code to write.
 
 ## Three ways to capture behavior
 

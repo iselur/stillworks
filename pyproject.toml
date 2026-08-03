@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "stillworks"
 version = "0.1.0"
-description = "Characterization testing with no test code to write — record what untested code does now, catch when it changes later. Zero dependencies."
+description = "Take a snapshot of what your code does, then see if your edit moved anything. For code with no tests. Zero dependencies."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
