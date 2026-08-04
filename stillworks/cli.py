@@ -319,7 +319,9 @@ def build_parser():
     sp = sub.add_parser("mcp", help="serve the MCP interface on stdio")
     sp.set_defaults(func=cmd_mcp)
 
-    sp = sub.add_parser("tools", help="which of the four agent tools you have")
+    # No count in the help text: it is one more place for "four" to survive a
+    # family of five, and the command's own output says the number anyway.
+    sp = sub.add_parser("tools", help="which of the agent tools you have")
     sp.add_argument("--json", action="store_true", help="machine-readable output")
     sp.set_defaults(func=cmd_tools)
 
