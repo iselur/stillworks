@@ -565,7 +565,9 @@ def _decode_claude_path(jsonl_path: str) -> str:
 # (update_plan, spawn_agent, wait, send_message) is coordination, not activity.
 _CODEX_WORK_CALLS = {"exec_command", "apply_patch"}
 
-_PATCH_MARKERS = ("*** Update File:", "*** Add File:", "*** Delete File:")
+# A patch marker can sit at the start of its own line, or halfway through a
+# line of JavaScript — see _patched_files.
+_PATCH_LINE = re.compile(r"\*\*\* (?:Update|Add|Delete) File:[ \t]*([^\n]+)")
 
 # Current Codex builds do not send arguments at all.  A `custom_tool_call`
 # carries a snippet of JavaScript — `tools.exec_command({cmd:"pytest -x",
@@ -582,6 +584,19 @@ _JS_COMMAND = re.compile(
 
 # Said in the first line of the output and nowhere else in the record.
 _SCRIPT_FAILED = "script failed"
+
+
+def _js_unescape(text: str) -> str:
+    """Best-effort: a JavaScript string literal's contents, read as text.
+
+    The whole snippet is not valid JSON, so it cannot simply be parsed.  Only
+    the two escapes that matter for finding a patch envelope are undone; being
+    wrong about the rest costs nothing, because all that is read back out of
+    the result is the file paths.
+    """
+    if "\\" not in text:
+        return text
+    return text.replace("\\n", "\n").replace('\\"', '"')
 
 
 def _unquote(raw: str) -> str:
@@ -624,32 +639,25 @@ def _script_failed(output) -> bool:
 
 
 def _patched_files(text: str) -> List[str]:
-    """File paths named in an apply_patch envelope.
+    """File paths named in an ``apply_patch`` envelope.
 
-    Codex has no structured file-write field: it edits by piping an envelope
-    like ``*** Update File: src/app.py`` through the shell, so the only record
-    of which file changed is the command text itself.  Scanning for the marker
-    lines recovers it.  Paths are returned in the order they appear.
+    Codex has no structured file-write field — it edits by handing an envelope
+    like ``*** Update File: src/app.py`` to a patch tool — so the only record of
+    which file changed is the text of the call itself.
+
+    The marker is not required to start its line: in a current session the
+    envelope is embedded in a line of JavaScript, and insisting on a line start
+    there finds nothing at all.
     """
     if not text or "*** " not in text:
         return []
     out: List[str] = []
-    # An envelope built as a JavaScript string literal arrives as one physical
-    # line with its newlines still escaped, so the marker lines have to be cut
-    # apart before they can be recognised.
-    if "\\n" in text:
-        text = text.replace("\\n", "\n")
-    for line in text.splitlines():
-        line = line.strip()
-        for marker in _PATCH_MARKERS:
-            if line.startswith(marker):
-                path = line[len(marker):].strip()
-                # Envelopes embedded in quoted shell strings pick up a trailing
-                # quote or backslash from the surrounding literal.
-                path = path.strip("'\"").rstrip("\\").strip()
-                if path:
-                    out.append(path)
-                break
+    for found in _PATCH_LINE.findall(_js_unescape(text)):
+        # Whatever follows the path is the rest of somebody's source line.
+        path = found.strip().rstrip("\\").strip().strip("'\"")
+        path = path.rstrip(" \t\\'\");,")
+        if path:
+            out.append(path)
     return out
 
 
