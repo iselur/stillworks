@@ -27,6 +27,15 @@ def _err(msg):
     return 2
 
 
+def _warn(msg):
+    """Something went wrong beside the answer, not instead of it.
+
+    Goes to stderr so it never lands in `--json`, and returns nothing, so it
+    cannot be mistaken for an exit code on the way out.
+    """
+    print("stillworks: warning: {}".format(msg), file=sys.stderr)
+
+
 def cmd_lock(args):
     project = os.path.abspath(args.project)
     if getattr(args, "timeout", None) is not None and args.timeout <= 0:
@@ -155,6 +164,11 @@ def cmd_check(args):
     result = core.check(project)
     if "error" in result:
         return _err(result["error"])
+    if "not_saved" in result:
+        # The comparison happened; only the receipt of it did not get written.
+        # Say so, and let the records below decide the exit code.
+        _warn(result["not_saved"] +
+              " — `accept` and `report` will not see this run")
     if args.json:
         print(json.dumps(result, indent=1, default=str))
     else:
@@ -218,7 +232,15 @@ def cmd_accept(args):
     if not args.ids and not args.all:
         return _err("say which records to accept: `stillworks accept ID ...` "
                     "or `stillworks accept --all`")
-    result = core.accept(project, ids=None if args.all else args.ids)
+    # Unlike `check`, this command exists only to write the lockfile.  If that
+    # write does not land nothing was accepted, so saying "accepted new
+    # behavior" and exiting 0 would be a straight lie — the next `check` would
+    # still fail and the baseline on disk would still be the old one.
+    try:
+        result = core.accept(project, ids=None if args.all else args.ids)
+    except OSError as exc:
+        return _err("could not update the baseline in {}: {}".format(
+            os.path.join(project, core.LOCK_DIR), exc))
     if "error" in result:
         return _err(result["error"])
     for rid in result["accepted"]:
@@ -237,8 +259,17 @@ def cmd_report(args):
     if text is None:
         return _err("no lockfile — run `stillworks lock` first")
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write(text)
+        # A path somebody typed: a read-only directory, a folder an earlier
+        # step was supposed to create, a typo.  Unhandled this came back as a
+        # traceback and exit 1, and 1 is this tool's word for BEHAVIOR CHANGED
+        # — so a report that wrote nothing looked exactly like a check that
+        # caught a regression.  Name the file, say why, exit 2.
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write(text)
+        except OSError as exc:
+            return _err("could not write the report to {}: {}".format(
+                args.output, exc))
         print("wrote {}".format(args.output))
     else:
         print(text)

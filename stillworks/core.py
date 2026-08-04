@@ -764,11 +764,24 @@ def check(project_dir):
         and counts.get("BROKEN", 0) == 0
     out = {"ok": ok, "counts": counts, "results": results,
            "checked": time.strftime("%Y-%m-%dT%H:%M:%S")}
-    # persist for `accept` and `report`
+    # Persist a receipt of this run, for `accept` and `report` to read.
+    #
+    # This is bookkeeping; the comparison above is the verdict.  A read-only
+    # `.stillworks` — a CI checkout, a mounted volume, a directory owned by
+    # somebody else — used to make this raise, and the traceback escaped as
+    # exit 1, which is this tool's word for BEHAVIOR CHANGED.  A project whose
+    # behavior had not moved failed the gate on a filesystem permission.  So
+    # the failure is recorded and handed back for the caller to say out loud,
+    # and `ok` stays whatever the records actually showed.
     d = os.path.join(project_dir, LOCK_DIR)
-    os.makedirs(d, exist_ok=True)
-    with open(os.path.join(d, LAST_CHECK_FILE), "w", encoding="utf-8") as f:
-        json.dump(out, f, indent=1, default=str)
+    try:
+        os.makedirs(d, exist_ok=True)
+        path = os.path.join(d, LAST_CHECK_FILE)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(out, f, indent=1, default=str)
+    except OSError as exc:
+        out["not_saved"] = "could not save the check result to {}: {}".format(
+            os.path.join(d, LAST_CHECK_FILE), exc)
     return out
 
 

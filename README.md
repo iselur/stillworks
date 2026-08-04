@@ -43,6 +43,13 @@ reader hung up (`stillworks check | head`, or `| less` quit with `q`). The
 last two mean the check never finished comparing, which is neither a pass
 nor a fail — and `stillworks check && deploy` needs to be able to tell.
 
+For the same reason, a read-only `.stillworks` does not fail the check. The
+comparison is the verdict; saving a receipt of it for `accept` and `report`
+is bookkeeping, so it warns on stderr and still answers `0` if nothing
+moved. `accept` goes the other way — writing the baseline is the whole job,
+so if that write fails it says which file and exits `2` rather than
+reporting behavior it did not bless.
+
 ## Should you just write tests instead?
 
 Often, yes — and you should. A real test suite (`pytest`, plus `approvaltests`,
