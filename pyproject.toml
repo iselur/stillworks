@@ -28,9 +28,9 @@ classifiers = [
 # but nobody should have to memorise two suffixed PyPI names, so
 # `pip install 'stillworks[all]'` hides them here.
 all = [
-  "unedit>=0.1.3",
-  "agentdiff-cli>=0.1.2",
-  "agentlog-tool>=0.2.2",
+  "unedit>=0.1.4",
+  "agentdiff-cli>=0.1.3",
+  "agentlog-tool>=0.2.3",
   "agentwatch>=0.1.0",
 ]
 
