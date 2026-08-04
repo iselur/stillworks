@@ -109,7 +109,14 @@ def cmd_lock(args):
     # Determinism guard: replay each record once; flag flaky ones.
     core.mark_nondeterministic(records, mod, project)
 
-    existing = core.load_lock(project)
+    # `lock` is the way out of a damaged lockfile, so it must not be blocked by
+    # one.  It only reads the old file to say what it is about to replace.
+    try:
+        existing = core.load_lock(project)
+    except core.LockfileError as exc:
+        existing = None
+        print("stillworks: replacing a lockfile that could not be read\n"
+              "  {}".format(exc), file=sys.stderr)
     if existing is not None:
         n_hist = len(existing.get("history") or [])
         print("stillworks: replacing existing lockfile ({} records{})\n"
@@ -383,7 +390,17 @@ def _run(argv=None):
         print("stillworks: {}".format(problem), file=sys.stderr)
         return 2
 
-    return args.func(args)
+    try:
+        return args.func(args)
+    except core.LockfileError as exc:
+        # Not 0 and not 1: `check` gates a merge, where 0 means nothing moved
+        # and 1 means something did.  A lockfile nobody can read is neither
+        # answer, and a script would believe either one.
+        print("stillworks: {}\n"
+              "  a lockfile is a recording — re-record it with "
+              "`stillworks lock`, or fix the file by hand."
+              .format(exc), file=sys.stderr)
+        return 2
 
 
 # The commands that actually operate on a project directory — the ones built

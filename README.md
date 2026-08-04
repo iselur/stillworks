@@ -184,6 +184,11 @@ the same recorded values is worth exactly as much.
   stored verbatim, and unpickling arguments runs code too. So `stillworks
   check` on a repo you just cloned is `make` on a repo you just cloned — read
   `.stillworks/lock.json` first if you would not run its `Makefile`.
+- A lockfile that ships in the repo also gets merged. A `lock.json` with a
+  conflict left in it — or one truncated by a `lock` that ran out of disk — is
+  an error naming the file, exit 2, not a `check` verdict and not the same
+  answer as "never locked". `stillworks lock` still works, so re-recording is
+  always the way out.
 - stdout of recorded *function calls* isn't captured (command records capture
   it fully).
 

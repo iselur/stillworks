@@ -564,12 +564,49 @@ def lock_path(project_dir):
     return os.path.join(project_dir, LOCK_DIR, LOCK_FILE)
 
 
+class LockfileError(Exception):
+    """The lockfile is there, and cannot be used.
+
+    Separate from "there is no lockfile" on purpose.  The caller turns this
+    into a sentence; the point of the type is that it cannot be mistaken for
+    the empty case on the way up.
+    """
+
+
 def load_lock(project_dir):
+    """The recorded baseline, or None if this project has never been locked.
+
+    None means *no lockfile*, and nothing else.  A merge conflict left in the
+    middle of one, a `lock` that ran out of disk halfway, a path that turned
+    out to be a directory — none of those are the empty case, and answering
+    them with it sends people to lock a project that is already locked.
+
+    `lock.json` is meant to be committed, which is what makes `check` work in
+    a reviewer's checkout.  A file that ships in a repo gets merged, so
+    `<<<<<<< HEAD` in the middle of this one is an ordinary Tuesday rather
+    than a hostile input.  Before this it was twenty lines of interpreter
+    internals ending in `Expecting value: line 1 column 1`, which names a
+    column in a file it does not name.
+    """
     path = lock_path(project_dir)
     if not os.path.exists(path):
         return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lock = json.load(f)
+    except ValueError as exc:           # JSONDecodeError is a ValueError
+        raise LockfileError(
+            "{}: not readable as JSON — {}".format(path, exc)) from exc
+    except OSError as exc:
+        raise LockfileError(
+            "{}: {}".format(path, exc.strerror or exc)) from exc
+    # Parsing is not the same as being a lockfile.  `null` is the one that
+    # matters: it decodes cleanly and would have come straight back here as
+    # None, which is how a project that was never locked answers.
+    if not isinstance(lock, dict) or not isinstance(lock.get("records"), list):
+        raise LockfileError(
+            "{}: readable, but not a stillworks lockfile".format(path))
+    return lock
 
 
 def save_lock(project_dir, lock):
