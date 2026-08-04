@@ -370,11 +370,43 @@ def main(argv=None):
     written as `stillworks check && deploy`.  An abandoned check must be
     neither answer, so it is 130 — the shell's own spelling of "stopped by
     ctrl-c".
+
+    A closed pipe is the same argument, twice over.  `stillworks check | head`
+    and `stillworks report | less` quit with `q` are ordinary ways to read a
+    long list of records, and unhandled the first of those ended in a traceback
+    and exit 1 — the code that means BEHAVIOR CHANGED.  A check that got cut
+    off compared nothing, so it answers 141: 128 + SIGPIPE, the shell's own
+    spelling of "the reader hung up".  The flush is in a `finally` because
+    argparse prints `--help` and `--version` and exits before `_run` runs.
     """
     try:
-        return _run(argv)
+        try:
+            return _run(argv)
+        finally:
+            sys.stdout.flush()
     except KeyboardInterrupt:
         return 130
+    except BrokenPipeError:
+        _stop_writing_down_a_closed_pipe()
+        return 141
+
+
+def _stop_writing_down_a_closed_pipe():
+    """Point stdout at nowhere, so nothing is left to fail on the way out.
+
+    Catching the `BrokenPipeError` is only half of it: whatever is still in the
+    buffer gets flushed again when the interpreter shuts down, too late for any
+    `except` of ours, and that second failure is what prints `Exception ignored
+    in: <_io.TextIOWrapper ...>` and turns the exit code into 120.  Redirecting
+    the file descriptor gives that flush somewhere harmless to go.
+    """
+    try:
+        devnull = os.open(os.devnull, os.O_WRONLY)
+        os.dup2(devnull, sys.stdout.fileno())
+        os.close(devnull)
+    except (AttributeError, OSError, ValueError):
+        pass                            # not a real stream; nothing to protect
+
 
 
 def _run(argv=None):

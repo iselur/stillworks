@@ -37,6 +37,12 @@ BEHAVIOR CHANGED: 24 records — 1 CHANGED, 23 OK
 Exit code `1` — the merge gate closes. If the change was intentional:
 `stillworks accept apply_discount#3`, and it becomes the new baseline.
 
+The other codes exist so nothing can impersonate that one: `0` nothing
+moved, `2` the lockfile is unreadable, `130` stopped by ctrl-c, `141` the
+reader hung up (`stillworks check | head`, or `| less` quit with `q`). The
+last two mean the check never finished comparing, which is neither a pass
+nor a fail — and `stillworks check && deploy` needs to be able to tell.
+
 ## Should you just write tests instead?
 
 Often, yes — and you should. A real test suite (`pytest`, plus `approvaltests`,
