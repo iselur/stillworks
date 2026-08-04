@@ -1,25 +1,28 @@
-"""The four claims every README in this family makes, checked against the code.
+"""The four claims the family README makes, checked against all five packages.
 
     Five tools for working with coding agents, same house style: zero
     dependencies, MIT, no API key, nothing leaves your machine. None of them
     call a model — that is the point, since the thing being checked already is
     one.
 
-That paragraph is the pitch.  It is repeated verbatim in all five READMEs, and
-until this file existed it was checked in none of them — which is the worst
-shape for a claim to be in, because being written five times reads as being
-agreed five times rather than as being asserted five times.
+That paragraph is the pitch.  Since 0.2.0 all five tools ship in this one
+distribution, so the wheel this repository builds is the whole family — and a
+claim made about five tools has to be checked against five packages, not
+against the flagship alone.  Until this file existed the paragraph was checked
+nowhere, which is the worst shape for a claim to be in: being written down
+reads as being agreed, not as being asserted.
 
 Each sentence is mechanical, so each gets a test:
 
-    zero dependencies      every import resolves to the standard library or to
-                           this package; `[project.dependencies]` is empty
+    zero dependencies      every import in every package resolves to the
+                           standard library or to the package's own modules;
+                           `[project.dependencies]` is empty
     nothing leaves         nothing that can open a socket is imported, and
     your machine           nothing is imported by name at runtime either
     no API key             no environment variable that looks like a
                            credential is read
-    none of them           no provider hostname or SDK appears anywhere in the
-    call a model           package
+    none of them           no provider hostname or SDK appears anywhere in
+    call a model           any package
 
 The last one is the load-bearing claim of the whole family: these tools check
 an agent's work, and a checker that phoned a model would be marking its own
@@ -38,7 +41,15 @@ import unittest
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-PACKAGE = "stillworks"
+# Every import package this distribution ships — the five console scripts each
+# have one.  Read from pyproject rather than written out here, so a package
+# added to the wheel is scanned the day it arrives instead of when somebody
+# remembers this list.
+import tomllib
+
+with open(os.path.join(_ROOT, "pyproject.toml"), "rb") as _fh:
+    _CFG = tomllib.load(_fh)
+PACKAGES = tuple(_CFG["tool"]["setuptools"]["packages"])
 
 # Every stdlib module that can open a socket, plus the popular third-party
 # clients.  A dependency-free tool that grew one of these would be the first
@@ -70,10 +81,10 @@ MODEL_HOSTS = (
 # only the second breaks the claim -- a tool that works on someone's code may
 # have perfectly good reason to mention the word in a message or a pattern.
 CREDENTIAL_MARKERS = ("API_KEY", "APIKEY", "SECRET", "TOKEN", "PASSWORD",
-                      "CREDENTIAL", "_KEY")
+                     "CREDENTIAL", "_KEY")
 
-# The paragraph at the foot of all five READMEs, with its line breaks removed
-# so a re-wrap does not read as a retraction.
+# The paragraph at the foot of the README, with its line breaks removed so a
+# re-wrap does not read as a retraction.
 FAMILY_BLURB = (
     "Five tools for working with coding agents, same house style: zero "
     "dependencies, MIT, no API key, nothing leaves your machine. None of them "
@@ -82,16 +93,18 @@ FAMILY_BLURB = (
 )
 
 
-def sources(package):
-    pkg = os.path.join(_ROOT, package)
-    for dirpath, dirnames, names in os.walk(pkg):
-        dirnames[:] = [d for d in dirnames if d != "__pycache__"]
-        for name in sorted(names):
-            if name.endswith(".py"):
-                yield os.path.join(dirpath, name)
+def sources():
+    """(package, path) for every module of every package in the wheel."""
+    for package in PACKAGES:
+        pkg = os.path.join(_ROOT, package)
+        for dirpath, dirnames, names in os.walk(pkg):
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
+            for name in sorted(names):
+                if name.endswith(".py"):
+                    yield package, os.path.join(dirpath, name)
 
 
-def imported_names(path):
+def imported_names(path, package):
     """(top-level module, full name, line) for every import in a file."""
     with open(path, encoding="utf-8") as fh:
         tree = ast.parse(fh.read(), path)
@@ -100,8 +113,8 @@ def imported_names(path):
             for a in node.names:
                 yield a.name.split(".")[0], a.name, node.lineno
         elif isinstance(node, ast.ImportFrom):
-            if node.level:          # a relative import, i.e. our own package
-                yield PACKAGE, "." * node.level + (node.module or ""), node.lineno
+            if node.level:          # a relative import, i.e. the owning package
+                yield package, "." * node.level + (node.module or ""), node.lineno
             else:
                 mod = node.module or ""
                 yield mod.split(".")[0], mod, node.lineno
@@ -142,54 +155,66 @@ def string_constants(path):
             yield node.value, node.lineno
 
 
+class TestTheWheelShipsTheWholeFamily(unittest.TestCase):
+
+    def test_five_packages_and_five_console_scripts_agree(self):
+        # Everything below scans PACKAGES, so the first thing to pin is that
+        # PACKAGES is the family: one console script per package, entry point
+        # inside the package it names.
+        scripts = _CFG["project"]["scripts"]
+        self.assertEqual(sorted(scripts), sorted(PACKAGES),
+                         "console scripts and packages disagree")
+        for command, target in scripts.items():
+            self.assertEqual(
+                target.split(".")[0], command,
+                "the {} command points into the {} package".format(
+                    command, target.split(".")[0]))
+        self.assertEqual(len(PACKAGES), 5,
+                         "the family blurb says five and the wheel ships %d"
+                         % len(PACKAGES))
+
+
 class TestZeroDependencies(unittest.TestCase):
 
-    def test_every_import_is_stdlib_or_our_own(self):
+    def test_every_import_is_stdlib_or_the_packages_own(self):
+        # Stricter than "inside this distribution": the tools were independent
+        # for all of 0.1.x and stay independent inside the shared wheel — a
+        # cross-package import would quietly weld two of them together.
         stdlib = set(sys.stdlib_module_names)
-        for path in sources(PACKAGE):
-            for top, full, lineno in imported_names(path):
-                if top in stdlib or top == PACKAGE or top == "":
+        for package, path in sources():
+            for top, full, lineno in imported_names(path, package):
+                if top in stdlib or top == package or top == "":
                     continue
-                self.fail("{}:{} imports {!r}, which is neither stdlib nor "
-                          "{}".format(os.path.basename(path), lineno, full,
-                                      PACKAGE))
+                self.fail("{}/{}:{} imports {!r}, which is neither stdlib nor "
+                          "{}".format(package, os.path.basename(path), lineno,
+                                      full, package))
 
     def test_the_package_metadata_declares_none(self):
-        import tomllib
-        with open(os.path.join(_ROOT, "pyproject.toml"), "rb") as fh:
-            cfg = tomllib.load(fh)
-        deps = cfg.get("project", {}).get("dependencies", [])
+        deps = _CFG.get("project", {}).get("dependencies", [])
         self.assertEqual(deps, [],
                          "pyproject declares runtime dependencies: %r" % deps)
 
-    def test_the_all_extra_names_only_the_family_and_stays_optional(self):
-        # stillworks is the only one of the five with an extra: `pip install
-        # 'stillworks[all]'` is how you get the whole family in one command.
-        # An extra is not a dependency — `pip install stillworks` still pulls
-        # nothing — but it is the one place a real dependency could arrive
-        # while the claim above stayed true, so it gets pinned to the four
-        # siblings by name.
-        import re
-        import tomllib
-        with open(os.path.join(_ROOT, "pyproject.toml"), "rb") as fh:
-            cfg = tomllib.load(fh)
-        extras = cfg.get("project", {}).get("optional-dependencies", {})
-        self.assertEqual(sorted(extras), ["all"],
-                         "an extra other than [all]: %r" % sorted(extras))
-        named = {re.split(r"[<>=!~\[ ]", s.strip())[0] for s in extras["all"]}
+    def test_the_all_extra_is_empty_and_still_present(self):
+        # `pip install 'stillworks[all]'` was the documented command for all
+        # of 0.1.x, so the extra must keep existing — and since 0.2.0 the
+        # whole family ships in the base wheel, so it must name nothing.  An
+        # extra that named anything again would be the one door a real
+        # dependency could arrive through while the claim above stayed true;
+        # one that named a distribution that does not exist sent pip
+        # backtracking to an older release once already.
+        extras = _CFG.get("project", {}).get("optional-dependencies", {})
         self.assertEqual(
-            named,
-            {"agentdiff-cli", "agentlog-tool", "agentwatch", "unedit"},
-            "[all] names something outside the family: %r" % sorted(named))
+            extras, {"all": []},
+            "the extras changed: %r — [all] must exist and stay empty" % extras)
 
-    def test_a_fresh_interpreter_can_import_it_with_no_site_packages(self):
+    def test_a_fresh_interpreter_can_import_all_five_with_no_site_packages(self):
         # The strongest form of the claim: run with `-S`, so nothing installed
-        # into site-packages is importable, and see if the CLI still starts.
+        # into site-packages is importable, and see if every package loads.
         import subprocess
         r = subprocess.run(
             [sys.executable, "-S", "-c",
              "import sys; sys.path.insert(0, %r); "
-             "import %s" % (_ROOT, PACKAGE)],
+             "import %s" % (_ROOT, ", ".join(PACKAGES))],
             capture_output=True, text=True)
         self.assertEqual(r.returncode, 0,
                          "importing without site-packages failed:\n" + r.stderr)
@@ -198,12 +223,12 @@ class TestZeroDependencies(unittest.TestCase):
 class TestNothingLeavesYourMachine(unittest.TestCase):
 
     def test_nothing_that_can_open_a_socket_is_imported(self):
-        for path in sources(PACKAGE):
-            for top, full, lineno in imported_names(path):
+        for package, path in sources():
+            for top, full, lineno in imported_names(path, package):
                 self.assertNotIn(
                     top, NETWORK_MODULES,
-                    "{}:{} imports {}".format(
-                        os.path.basename(path), lineno, full))
+                    "{}/{}:{} imports {}".format(
+                        package, os.path.basename(path), lineno, full))
 
     def test_no_import_is_hidden_behind_a_string(self):
         # The check above reads import statements, so a module named by a
@@ -215,7 +240,7 @@ class TestNothingLeavesYourMachine(unittest.TestCase):
         # name only exists at run time.  So the sibling test below carries the
         # weight here instead — the argument is never a literal, which is what
         # makes those calls the user's choice rather than the tool's.
-        for path in sources(PACKAGE):
+        for package, path in sources():
             with open(path, encoding="utf-8") as fh:
                 tree = ast.parse(fh.read(), path)
             for node in ast.walk(tree):
@@ -224,17 +249,17 @@ class TestNothingLeavesYourMachine(unittest.TestCase):
                 fn = node.func
                 name = getattr(fn, "id", None) or getattr(fn, "attr", None)
                 if name == "__import__":
-                    self.fail("{}:{} imports by name at runtime".format(
-                        os.path.basename(path), node.lineno))
+                    self.fail("{}/{}:{} imports by name at runtime".format(
+                        package, os.path.basename(path), node.lineno))
 
     def test_the_module_it_imports_is_always_one_you_named(self):
         # The complement of the test above, and the reason the exception there
         # is safe to make.  `import_module` loads whatever string it is handed,
         # so what matters is where the string comes from: every call site
         # passes a value derived from the argument on the command line, never a
-        # module this package picked.  A literal here would be a name stillworks
+        # module the package picked.  A literal here would be a name the tool
         # chose for itself, which is the thing the import scan exists to catch.
-        for path in sources(PACKAGE):
+        for package, path in sources():
             with open(path, encoding="utf-8") as fh:
                 tree = ast.parse(fh.read(), path)
             for node in ast.walk(tree):
@@ -246,70 +271,70 @@ class TestNothingLeavesYourMachine(unittest.TestCase):
                     continue
                 self.assertNotIsInstance(
                     node.args[0], ast.Constant,
-                    "{}:{} imports a module this package named itself".format(
-                        os.path.basename(path), node.lineno))
+                    "{}/{}:{} imports a module the package named itself".format(
+                        package, os.path.basename(path), node.lineno))
 
-    def test_no_url_appears_in_the_package(self):
+    def test_no_url_appears_in_any_package(self):
         # Not a network call by itself, but nothing in a tool that promises to
         # stay local has a reason to name a remote address, and a string is
         # where one would first appear.
-        for path in sources(PACKAGE):
+        for package, path in sources():
             for text, lineno in string_constants(path):
                 for scheme in ("http://", "https://"):
                     if scheme in text and "github.com/iselur" not in text:
-                        self.fail("{}:{} names a remote address: {!r}".format(
-                            os.path.basename(path), lineno, text[:80]))
+                        self.fail("{}/{}:{} names a remote address: {!r}".format(
+                            package, os.path.basename(path), lineno, text[:80]))
 
 
 class TestNoAPIKey(unittest.TestCase):
 
     def test_no_credential_shaped_environment_variable_is_read(self):
-        for path in sources(PACKAGE):
+        for package, path in sources():
             for name, lineno in environment_names(path):
                 for marker in CREDENTIAL_MARKERS:
                     self.assertNotIn(
                         marker, name.upper(),
-                        "{}:{} reads {}, which reads as a credential".format(
-                            os.path.basename(path), lineno, name))
+                        "{}/{}:{} reads {}, which reads as a credential".format(
+                            package, os.path.basename(path), lineno, name))
 
     def test_the_environment_is_never_swept(self):
         # The check above reads the names one at a time, so code that walked
         # the whole environment looking for anything key-shaped would slip
         # past it.  Handing `os.environ` to a subprocess is not that and stays
         # allowed; enumerating it is, and has no use here.
-        for path in sources(PACKAGE):
+        for package, path in sources():
             with open(path, encoding="utf-8") as fh:
                 tree = ast.parse(fh.read(), path)
             for node in ast.walk(tree):
                 if isinstance(node, ast.For) and _is_environ(node.iter):
-                    self.fail("{}:{} iterates the environment".format(
-                        os.path.basename(path), node.lineno))
+                    self.fail("{}/{}:{} iterates the environment".format(
+                        package, os.path.basename(path), node.lineno))
                 if (isinstance(node, ast.Attribute)
                         and node.attr in ("items", "keys", "values")
                         and _is_environ(node.value)):
-                    self.fail("{}:{} enumerates the environment".format(
-                        os.path.basename(path), node.lineno))
+                    self.fail("{}/{}:{} enumerates the environment".format(
+                        package, os.path.basename(path), node.lineno))
 
 
 class TestNoneOfThemCallAModel(unittest.TestCase):
     """The claim the whole family rests on."""
 
     def test_no_model_sdk_is_imported(self):
-        for path in sources(PACKAGE):
-            for top, full, lineno in imported_names(path):
+        for package, path in sources():
+            for top, full, lineno in imported_names(path, package):
                 self.assertNotIn(
                     top, MODEL_SDKS,
-                    "{}:{} imports the {} SDK".format(
-                        os.path.basename(path), lineno, full))
+                    "{}/{}:{} imports the {} SDK".format(
+                        package, os.path.basename(path), lineno, full))
 
     def test_no_provider_hostname_appears(self):
-        for path in sources(PACKAGE):
+        for package, path in sources():
             for text, lineno in string_constants(path):
                 low = text.lower()
                 for host in MODEL_HOSTS:
                     self.assertNotIn(
-                        host, low, "{}:{} names {}".format(
-                            os.path.basename(path), lineno, host))
+                        host, low, "{}/{}:{} names {}".format(
+                            package, os.path.basename(path), lineno, host))
 
     def test_the_readme_still_makes_the_claim(self):
         # If the paragraph is ever dropped or softened, these tests should be

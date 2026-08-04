@@ -1,25 +1,28 @@
-"""Five READMEs carry the same family list, differing in one arrow.
+"""The READMEs in this family carry the same roster, differing in one arrow.
 
-`test_family_claims.py` pins the paragraph above the list — the pitch, written
-out five times, so a re-word in one repo cannot quietly disagree with the other
-four.  It does not look at the list itself, and the list is the part that was
-copied.
+`test_family_claims.py` pins the paragraph above the list — the pitch — and
+checks the four claims it makes against the code of all five packages.  It does
+not look at the list itself, and the list is the part that gets copied between
+repositories.
 
 These sections were made by pasting one into the next.  What survives that is
-five identical rosters; what does not is `← you are here`, which has to move
-one row every time.  A marker left where the last paste put it points a reader
-at the wrong tool, and reads exactly like a correct README — the sentence is
+identical rosters; what does not is `← you are here`, which has to move one row
+every time.  A marker left where the last paste put it points a reader at the
+wrong tool, and reads exactly like a correct README — the sentence is
 well-formed, the link works, it is just about somebody else's project.
 
 The counts are the other half.  "Five tools" and "all five" are written in
 words, in prose, nowhere near the list they count.  A sixth tool means editing
-five READMEs in three places each, and the two words are the places most easily
-missed: everything still renders, and the list quietly outnumbers its own
-description.
+the roster, the counts, and the wheel, and the two words are the places most
+easily missed: everything still renders, and the list quietly outnumbers its
+own description.
 
 So: the rows are counted against the words that count them, the arrow is
-checked to be on this tool and no other, and each row is checked to link to the
-tool it names rather than to whichever one was pasted next to it.
+checked to be on this tool and no other, each row is checked to link to the
+tool it names rather than to whichever one was pasted next to it — and the
+roster is checked against the wheel, because since 0.2.0 `pip install
+stillworks` is the install, and what it delivers is `[project.scripts]`, not
+the list above it.
 """
 
 from __future__ import annotations
@@ -34,15 +37,9 @@ README = os.path.join(_ROOT, "README.md")
 # The tool this repository is, as the roster spells it.
 THIS_ONE = "stillworks"
 
-# The one tool that can install the others, and the extra that does it.
+# The one command that installs the family, since 0.2.0 all of it at once.
 INSTALLER = "stillworks"
-INSTALL_LINE = "pip install 'stillworks[all]'"
-
-# Where the roster's name and the PyPI name are not the same word.  Both were
-# taken because the plain one was already on PyPI, and both are spelled the
-# short way everywhere a person reads them — which is the whole reason the two
-# lists need tying together rather than eyeballing.
-ON_PYPI = {"agentdiff": "agentdiff-cli", "agentlog": "agentlog-tool"}
+INSTALL_LINE = "pip install stillworks"
 
 HEADING = "## Part of a small family"
 MARKER = "← you are here"
@@ -69,13 +66,14 @@ _FENCE = re.compile(r"^```[a-z]*\n(.*?)^```", re.S | re.M)
 # the point of this test is the one that gets missed.
 #
 # Matched by shape rather than swept for, because the same page says "Each of
-# those four claims" about something else and "Counting all four" about a
-# screenshot, and neither is a disagreement about how many tools there are.
+# those four claims" about something else, and that is not a disagreement about
+# how many tools there are.
 _COUNTS = (
     re.compile(r"([A-Z][a-z]+) tools for working with coding agents"),
+    re.compile(r"([A-Z][a-z]+) small tools for working with coding agents"),
     re.compile(r"all ([a-z]+) agent tools"),
     re.compile(r"One install gets all ([a-z]+)"),
-    re.compile(r"or all ([a-z]+):\s+pip install"),
+    re.compile(r"one install, all ([a-z]+) commands"),
 )
 
 _WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -136,10 +134,10 @@ class TestTheFamilyRosterSaysWhichOneYouAreReading(unittest.TestCase):
             "this can find, so the count below compared nothing")
 
     def test_every_count_it_gives_is_the_number_of_rows(self):
-        # "all five agent tools" sits in the install comment at the top of the
-        # page; "One install gets all five" sits at the bottom.  Adding a tool
-        # is three edits to this README and those two are the ones that still
-        # render perfectly when they are missed.
+        # "Five small tools" sits in the opening line of the page; "One install
+        # gets all five" sits at the bottom.  Adding a tool is several edits to
+        # this README and those are the ones that still render perfectly when
+        # they are missed.
         for word, where in counts_written_out(self.text):
             line = self.text.count("\n", 0, where) + 1
             self.assertIn(
@@ -209,31 +207,39 @@ class TestTheFamilyRosterSaysWhichOneYouAreReading(unittest.TestCase):
             "the section says to install the family with {} and does not list "
             "it as one of the tools".format(INSTALLER))
 
+    def test_the_retired_install_names_are_gone(self):
+        # 'stillworks[all]' was the 0.1.x install line and now delivers nothing
+        # the base wheel does not; agentdiff-cli and agentlog-tool were the
+        # suffixed per-tool distributions of that era.  A README that still
+        # shows any of them sends a reader to install a second copy of a tool
+        # this wheel already carries.
+        for retired in ("stillworks[all]", "agentdiff-cli", "agentlog-tool"):
+            self.assertNotIn(
+                retired, self.text,
+                "README.md still shows {!r}, a retired 0.1.x install "
+                "name".format(retired))
+
     def test_the_roster_is_the_family_the_install_actually_gets(self):
-        # This repository is the only one of the five where the list can be
-        # checked against something a machine reads.  `pip install
-        # 'stillworks[all]'` is the command four other READMEs point at, and
-        # what it installs is the `[all]` extra, not the list above it.  The
-        # two could disagree in either direction — a tool added to the roster
-        # and not to the extra is a promise the install does not keep, and one
-        # added to the extra and not the roster arrives on a machine without
-        # ever having been described.
-        #
-        # `test_family_claims.py` already pins `[all]` to a set written out in
-        # that file.  That is a second copy of the family, so it is pinned here
-        # to the README rather than to another list; three copies that all have
-        # to agree is what keeps any one of them from being edited alone.
+        # Since 0.2.0 the roster can be checked against something a machine
+        # reads: `pip install stillworks` delivers `[project.scripts]`, one
+        # command per package in the wheel.  The two could disagree in either
+        # direction — a tool added to the roster and not to the wheel is a
+        # promise the install does not keep, and one added to the wheel and
+        # not the roster arrives on a machine without ever having been
+        # described.
         import tomllib
         with open(os.path.join(_ROOT, "pyproject.toml"), "rb") as fh:
             cfg = tomllib.load(fh)
-        extra = cfg["project"]["optional-dependencies"]["all"]
-        self.assertTrue(extra, "the [all] extra is empty")
-        named = {re.split(r"[<>=!~\[ ]", s.strip())[0] for s in extra}
-        listed = {name for name, _, _, _ in self.rows} - {INSTALLER}
+        shipped = set(cfg["project"]["scripts"])
         self.assertEqual(
-            {ON_PYPI.get(name, name) for name in listed}, named,
-            "the family list names {} and `[all]` installs {} — one of them "
-            "was edited without the other".format(sorted(listed), sorted(named)))
+            shipped, set(cfg["tool"]["setuptools"]["packages"]),
+            "the wheel's console scripts and packages disagree")
+        listed = {name for name, _, _, _ in self.rows}
+        self.assertEqual(
+            listed, shipped,
+            "the family list names {} and the wheel ships {} — one of them "
+            "was edited without the other".format(sorted(listed),
+                                                 sorted(shipped)))
 
 
 if __name__ == "__main__":

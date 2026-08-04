@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillworks"
-version = "0.1.3"
-description = "Take a snapshot of what your code does, then see if your edit moved anything. For code with no tests. Zero dependencies."
+version = "0.2.0"
+description = "Five small tools for working with coding agents: snapshot your code's behavior, undo agent edits, review agent diffs, read agent logs, watch an agent live. One install, zero dependencies."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
@@ -23,27 +23,22 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-# The rest of the family.  They stay separate distributions — independent
-# versions, and `pip install stillworks` keeps its zero-dependency promise —
-# but nobody should have to memorise two suffixed PyPI names, so
-# `pip install 'stillworks[all]'` hides them here.
-# The floors are the first release of each that reports its own version
-# correctly.  unedit 0.1.4 and agentdiff-cli 0.1.3 shipped with the version
-# fixed in the source and an older build inside the wheel, so `--version` lied;
-# the fix could not go out under those numbers because PyPI filenames cannot be
-# replaced.  Anyone installing the family should not land on one of them.
-all = [
-  "unedit>=0.1.5",
-  "agentdiff-cli>=0.1.4",
-  "agentlog-tool>=0.2.3",
-  "agentwatch>=0.1.0",
-]
+# Since 0.2.0 the whole family ships in this one distribution, so the extra is
+# empty.  It stays because `pip install 'stillworks[all]'` was the documented
+# install command for 0.1.x — that command must keep working, and must never
+# again resolve to an older release the way it did while the extra pinned a
+# distribution that did not exist yet.
+all = []
 
 [project.scripts]
 stillworks = "stillworks.cli:main"
+unedit = "unedit.cli:main"
+agentdiff = "agentdiff.cli:main"
+agentlog = "agentlog.cli:main"
+agentwatch = "agentwatch.cli:main"
 
 [project.urls]
 Homepage = "https://github.com/iselur/stillworks"
 
 [tool.setuptools]
-packages = ["stillworks"]
+packages = ["stillworks", "unedit", "agentdiff", "agentlog", "agentwatch"]

@@ -18,8 +18,7 @@ agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
 that can run a shell command). Python ≥ 3.9, stdlib only, MIT license.
 
 ```bash
-pip install 'stillworks[all]'   # all five agent tools (see below)
-pip install stillworks          # or just this one, zero dependencies
+pip install stillworks   # one install, all five agent tools (see below)
 
 stillworks lock src/pricing.py --fuzz 8   # before: record real behavior
 # ... let your AI agent refactor pricing.py ...
@@ -145,21 +144,23 @@ trust the merge. (`report` without `-o` prints to stdout.) All commands take
 
 ```
 $ stillworks tools
-  stillworks  0.1.3  record what your code does now, catch when it changes
-  unedit      0.1.4  a safety net for letting an agent loose on your files
-  agentdiff   —      see what the agent actually changed, before you merge
+  stillworks  0.2.0  record what your code does now, catch when it changes
+  unedit      0.1.5  a safety net for letting an agent loose on your files
+  agentdiff   0.1.4  see what the agent actually changed, before you merge
   agentlog    0.2.4  what did your coding agent actually do today?
   agentwatch  0.1.0  tail what your agent is doing, right now
 
-  missing: agentdiff
-  install:  pip install agentdiff-cli
-  or all five:  pip install 'stillworks[all]'
+  all five installed
 ```
 
-It finds the others on your PATH and asks each for its version — it never
-imports them, so the extra stays genuinely optional and each tool keeps its own
-release cycle. Always exits 0; it reports, it does not judge. `--json` for
-scripts.
+All five commands arrive with `pip install stillworks`, so this is a health
+check rather than a shopping list. It finds each command on your PATH and asks
+it for its version — it never imports the siblings, because an import cannot
+see the one thing worth catching: an old copy from the 0.1.x era of separate
+distributions still shadowing the new one. A missing or stale row means a
+damaged install or exactly that shadowing, and either way the repair is one
+command: `pip install --upgrade --force-reinstall stillworks`. Always exits 0;
+it reports, it does not judge. `--json` for scripts.
 
 No pip available (managed environments, PEP 668)? It's stdlib-only, so a
 checkout works as-is:
@@ -279,19 +280,22 @@ call a model — that is the point, since the thing being checked already is
 one.
 
 Each of those four claims is a test rather than a promise, in
-`tests/test_family_claims.py`: every import resolves to the standard library or
-to this package, nothing that can open a socket is imported, no environment
-variable that looks like a credential is read, and no model SDK or provider
-hostname appears anywhere. A claim repeated in five READMEs and checked in none
-of them would read as five agreements when it was one assertion.
+`tests/test_family_claims.py`, and since 0.2.0 the whole family ships in this
+one distribution, so the tests scan all five packages: every import resolves to
+the standard library or to the package's own modules, nothing that can open a
+socket is imported, no environment variable that looks like a credential is
+read, and no model SDK or provider hostname appears anywhere. A claim repeated
+in five READMEs and checked in none of them would read as five agreements when
+it was one assertion.
 
 Two of those checks are shaped by what stillworks does. It is the one tool here
 that must import a module by name at run time — that is what `lock` is — so
 instead of banning that, the test pins the property that makes it safe: the name
 is never a literal, so it is always the one you passed on the command line and
-never one stillworks picked. And `[all]` is an extra rather than a dependency,
-so it is checked to name the four siblings and nothing else; `pip install
-stillworks` still pulls nothing.
+never one stillworks picked. And `[all]`, the extra that used to pull the
+family in, is checked to still exist and to name nothing at all — the install
+command people learned in 0.1.x keeps working, and an extra that named anything
+again would be the one door a real dependency could arrive through.
 
 - [stillworks](https://github.com/iselur/stillworks) — record what your code does now, catch when it changes later  ← you are here
 - [agentdiff](https://github.com/iselur/agentdiff) — see what the agent actually changed, before you merge
@@ -302,7 +306,7 @@ stillworks` still pulls nothing.
 One install gets all five, and `stillworks tools` says which ones you have:
 
 ```sh
-pip install 'stillworks[all]'
+pip install stillworks
 stillworks tools
 ```
 

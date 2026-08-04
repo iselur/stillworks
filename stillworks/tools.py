@@ -1,10 +1,12 @@
-"""`stillworks tools` — what of the family is installed, and what is missing.
+"""`stillworks tools` — the family, what version of each is here.
 
-The tools ship as independent distributions on purpose, so nothing here may
-import a sibling: that would turn an optional extra into a real
-dependency the first time someone forgot a try/except.  Detection is done from
-the outside instead — find the command on PATH, ask it for its version — which
-is also what the user would do by hand.
+Since 0.2.0 the whole family ships in this one distribution, so all five
+commands arrive together and a missing one means a damaged install or an old
+copy shadowing it on PATH — not a package left uninstalled.  Detection stays
+external all the same — find the command, ask it for its version — because the
+transition from the 0.1.x era of separate distributions leaves exactly the
+stale copies that only an outside look can see, and importing a sibling would
+report this wheel's version even when the user's shell runs another.
 """
 
 from __future__ import annotations
@@ -17,20 +19,19 @@ from typing import List, Optional, Tuple
 
 from . import __version__
 
-# command, PyPI distribution, one-line pitch.  The distribution name is only
-# shown when something is missing, because two of them had to take a
-# suffixed name and the whole point of the `[all]` extra is that nobody has to
-# learn them.
+# command, PyPI distribution, one-line pitch.  One distribution since 0.2.0:
+# the suffixed per-tool names of the 0.1.x era (agentdiff-cli, agentlog-tool)
+# are history, and nothing here should ever send a user back to them.
 FAMILY: List[Tuple[str, str, str]] = [
     ("stillworks", "stillworks",
      "record what your code does now, catch when it changes"),
-    ("unedit", "unedit",
+    ("unedit", "stillworks",
      "a safety net for letting an agent loose on your files"),
-    ("agentdiff", "agentdiff-cli",
+    ("agentdiff", "stillworks",
      "see what the agent actually changed, before you merge"),
-    ("agentlog", "agentlog-tool",
+    ("agentlog", "stillworks",
      "what did your coding agent actually do today?"),
-    ("agentwatch", "agentwatch",
+    ("agentwatch", "stillworks",
      "tail what your agent is doing, right now"),
 ]
 
@@ -137,17 +138,13 @@ def render(rows: List[Tuple[str, str, str, Optional[str]]]) -> str:
     lines.append("")
     if not missing:
         lines.append("  {} installed".format(_count(len(rows))))
-    elif len(missing) == len(rows) - 1:
-        # Everything but stillworks itself: the extra is the whole answer.
-        lines.append("  missing: {}".format(", ".join(c for c, _ in missing)))
-        lines.append("  install {}:  pip install 'stillworks[all]'"
-                     .format(_count(len(rows))))
     else:
+        # All five ship in this one wheel, so a command that is absent means
+        # the install is damaged or an older copy shadows it — either way a
+        # reinstall of the one distribution is the whole repair.
         lines.append("  missing: {}".format(", ".join(c for c, _ in missing)))
-        lines.append("  install:  pip install {}".format(
-            " ".join(d for _, d in missing)))
-        lines.append("  or {}:  pip install 'stillworks[all]'"
-                     .format(_count(len(rows))))
+        lines.append("  repair:  pip install --upgrade --force-reinstall "
+                     "stillworks")
     return "\n".join(lines)
 
 

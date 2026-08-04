@@ -165,16 +165,21 @@ class TestRender(unittest.TestCase):
         self.assertIn("missing: agentdiff", out)
         self.assertNotIn("unedit,", out.split("missing:")[1])
 
-    def test_partial_install_offers_the_exact_distribution_name(self):
-        # agentdiff's PyPI name is suffixed; a user cannot guess it.
+    def test_a_missing_command_is_repaired_with_the_one_distribution(self):
+        # Since 0.2.0 everything ships in this wheel, so absence means damage
+        # or shadowing, and the repair is a reinstall of the one name.
         out = tools.render(_rows(stillworks="0.1.0", unedit="0.1.0"))
-        self.assertIn("agentdiff-cli", out)
-        self.assertIn("agentlog-tool", out)
+        self.assertIn("pip install --upgrade --force-reinstall stillworks", out)
 
-    def test_only_stillworks_present_recommends_the_extra_alone(self):
-        out = tools.render(_rows(stillworks="0.1.0"))
-        self.assertIn("pip install 'stillworks[all]'", out)
-        self.assertNotIn("agentdiff-cli", out)
+    def test_the_retired_suffixed_names_are_never_recommended(self):
+        # agentdiff-cli and agentlog-tool are the 0.1.x era.  Sending a user
+        # to them installs a second copy of a tool this wheel already carries.
+        for rows in (_rows(stillworks="0.1.0"),
+                     _rows(stillworks="0.1.0", unedit="0.1.0")):
+            out = tools.render(rows)
+            self.assertNotIn("agentdiff-cli", out)
+            self.assertNotIn("agentlog-tool", out)
+            self.assertNotIn("[all]", out)
 
     def test_unknown_version_still_counts_as_installed(self):
         out = tools.render(_rows(stillworks="0.1.0", unedit="?"))
