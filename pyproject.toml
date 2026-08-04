@@ -27,9 +27,14 @@ classifiers = [
 # versions, and `pip install stillworks` keeps its zero-dependency promise —
 # but nobody should have to memorise two suffixed PyPI names, so
 # `pip install 'stillworks[all]'` hides them here.
+# The floors are the first release of each that reports its own version
+# correctly.  unedit 0.1.4 and agentdiff-cli 0.1.3 shipped with the version
+# fixed in the source and an older build inside the wheel, so `--version` lied;
+# the fix could not go out under those numbers because PyPI filenames cannot be
+# replaced.  Anyone installing the family should not land on one of them.
 all = [
-  "unedit>=0.1.4",
-  "agentdiff-cli>=0.1.3",
+  "unedit>=0.1.5",
+  "agentdiff-cli>=0.1.4",
   "agentlog-tool>=0.2.3",
   "agentwatch>=0.1.0",
 ]
