@@ -262,6 +262,21 @@ dependencies, MIT, no API key, nothing leaves your machine. None of them
 call a model — that is the point, since the thing being checked already is
 one.
 
+Each of those four claims is a test rather than a promise, in
+`tests/test_family_claims.py`: every import resolves to the standard library or
+to this package, nothing that can open a socket is imported, no environment
+variable that looks like a credential is read, and no model SDK or provider
+hostname appears anywhere. A claim repeated in five READMEs and checked in none
+of them would read as five agreements when it was one assertion.
+
+Two of those checks are shaped by what stillworks does. It is the one tool here
+that must import a module by name at run time — that is what `lock` is — so
+instead of banning that, the test pins the property that makes it safe: the name
+is never a literal, so it is always the one you passed on the command line and
+never one stillworks picked. And `[all]` is an extra rather than a dependency,
+so it is checked to name the four siblings and nothing else; `pip install
+stillworks` still pulls nothing.
+
 - [stillworks](https://github.com/iselur/stillworks) — record what your code does now, catch when it changes later  ← you are here
 - [agentdiff](https://github.com/iselur/agentdiff) — see what the agent actually changed, before you merge
 - [agentlog](https://github.com/iselur/agentlog) — what did your coding agent actually do today?
