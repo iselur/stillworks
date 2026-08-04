@@ -68,12 +68,27 @@ _FENCE = re.compile(r"^```[a-z]*\n(.*?)^```", re.S | re.M)
 # Matched by shape rather than swept for, because the same page says "Each of
 # those four claims" about something else, and that is not a disagreement about
 # how many tools there are.
+# The number words a family size is ever written as.  The two swept patterns
+# in `_COUNTS` are restricted to these so that neither can match a word this
+# file has no number for.
+_NUMBER_WORDS = "one|two|three|four|five|six|seven|eight|nine|ten"
+
 _COUNTS = (
     re.compile(r"([A-Z][a-z]+) tools for working with coding agents"),
     re.compile(r"([A-Z][a-z]+) small tools for working with coding agents"),
     re.compile(r"all ([a-z]+) agent tools"),
     re.compile(r"One install gets all ([a-z]+)"),
     re.compile(r"one install, all ([a-z]+) commands"),
+    # The two below are swept rather than shape-matched, and came from
+    # tests/test_readme.py, which checked this same claim from the other end.
+    # The four above name the sentences that state the count today; these ask
+    # whether any sentence states one, so a re-worded pitch keeps being
+    # checked instead of quietly falling out of the net.  Both are restricted
+    # to number words, which is what makes them safe to sweep with: a match is
+    # always a word `_WORDS` can look up.
+    re.compile(r"\b({})\s+(?:agent\s+)?tools\b".format(_NUMBER_WORDS), re.I),
+    re.compile(r"\ball\s+({})\s*(?:[,:.]|\n[ \t]*\n|\Z)".format(
+        _NUMBER_WORDS), re.I),
 )
 
 _WORDS = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
@@ -148,6 +163,43 @@ class TestTheFamilyRosterSaysWhichOneYouAreReading(unittest.TestCase):
                 _WORDS[word.lower()], len(self.rows),
                 "README.md:{} says there are {} of them and the family list "
                 "has {} rows".format(line, word.lower(), len(self.rows)))
+
+    def _words(self, text):
+        """Every family size a passage states, lowercased."""
+        return {word.lower() for word, _ in counts_written_out(text)}
+
+    def test_the_claim_patterns_still_catch_the_bug_they_were_written_for(self):
+        # From tests/test_readme.py, which is where the swept patterns came
+        # from.  They were narrowed once, after "a user record is written for
+        # three different things" was read as a claim about the family: prose
+        # about something else must not trip them, and the wrong-count
+        # sentences must still be caught.  Without this, narrowing them again
+        # until they match nothing would look like every count agreeing.
+        for wrong in ("Install all four agent tools, including this one.",
+                      "Four tools for working with coding agents.",
+                      "Install all four:  pip install 'stillworks[all]'",
+                      "all four, and `stillworks tools` says so"):
+            self.assertEqual(self._words(wrong), {"four"}, wrong)
+        for innocent in ("a user record is written for three different things",
+                         "counting all three reported 38318 turns",
+                         "all five of the records were skipped silently"):
+            self.assertEqual(self._words(innocent), set(), innocent)
+
+    def test_where_a_line_wraps_does_not_change_what_a_sentence_claims(self):
+        # A README is written to a column, so the word after a number often
+        # lands on the next line.  An end-of-line anchor reads that as the end
+        # of the sentence and calls "counting all four reported 38318 turns" a
+        # promise of four tools -- a failure caused by nothing but where the
+        # editor happened to wrap.  The claim must be read from the words.
+        for innocent in ("counting all four\nreported 38318 turns",
+                         "install all four\nof them at once",
+                         "Counting all four\n    reported 38318 turns"):
+            self.assertEqual(self._words(innocent), set(), innocent)
+        # ...and a real claim at the end of a line is still a real claim.
+        for wrong in ("Install all four\n\npip install 'stillworks[all]'",
+                      "there are all four",
+                      "the family is all four.\n\nInstall it."):
+            self.assertEqual(self._words(wrong), {"four"}, wrong)
 
     def test_exactly_one_row_says_you_are_here(self):
         marked = [name for name, _, _, is_marked in self.rows if is_marked]
