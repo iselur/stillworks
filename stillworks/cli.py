@@ -352,6 +352,25 @@ def _write_utf8_if_the_locale_said_nothing():
 
 
 def main(argv=None):
+    """Entry point, and the one place ctrl-c is allowed to mean something.
+
+    Recording a baseline runs the commands being recorded, and those are test
+    suites and builds — the longest-running thing anybody points this tool at.
+    Interrupting one is ordinary; a traceback in reply reads as a crash.
+
+    The code matters more here than elsewhere, because these codes are already
+    load-bearing: `check` exits 0 for unchanged and 1 for changed, and gets
+    written as `stillworks check && deploy`.  An abandoned check must be
+    neither answer, so it is 130 — the shell's own spelling of "stopped by
+    ctrl-c".
+    """
+    try:
+        return _run(argv)
+    except KeyboardInterrupt:
+        return 130
+
+
+def _run(argv=None):
     _write_utf8_if_the_locale_said_nothing()
     parser = build_parser()
     args = parser.parse_args(argv)
