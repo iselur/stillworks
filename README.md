@@ -178,9 +178,12 @@ the same recorded values is worth exactly as much.
   read-only code paths, or use `--cmd` against a sandbox.
 - Arguments are pickled into `.stillworks/lock.json` for replay; exotic
   unpicklable inputs are counted and skipped, not silently dropped. Treat the
-  lockfile like a fixture: don't lock functions whose arguments are secrets,
-  and don't `check` lockfiles from sources you don't trust (unpickling runs
-  code).
+  lockfile like a fixture: don't lock functions whose arguments are secrets.
+- **A lockfile is executable, the same way a Makefile is.** It ships in the
+  repo, and `check` re-runs what it names: `--cmd` records are shell commands
+  stored verbatim, and unpickling arguments runs code too. So `stillworks
+  check` on a repo you just cloned is `make` on a repo you just cloned — read
+  `.stillworks/lock.json` first if you would not run its `Makefile`.
 - stdout of recorded *function calls* isn't captured (command records capture
   it fully).
 
