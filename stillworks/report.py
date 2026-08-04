@@ -35,6 +35,12 @@ def build(project_dir):
     if n_nondet:
         lines.append("**Flagged nondeterministic (excluded from gating):** {}"
                      .format(n_nondet))
+    if lock.get("partial"):
+        # Next to the record count, which is the number a reader would
+        # otherwise take as the size of what was covered.
+        lines.append("**Baseline is partial:** {} — whatever it would have "
+                     "exercised afterwards is not covered by any verdict "
+                     "below.".format(_one_row(lock["partial"])))
     lines.append("")
 
     if last:

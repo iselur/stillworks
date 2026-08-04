@@ -46,6 +46,10 @@ def cmd_lock(args):
     module_info = None
     mod = None
     skipped = 0
+    # Why the recording run stopped short, or "" if it ran to the end.  It
+    # goes into the lockfile: a lockfile is committed and read for months, and
+    # a warning printed here is gone with the terminal it was printed in.
+    partial = ""
 
     if not args.target and not args.cmd:
         return _err("nothing to lock — give a TARGET module/file, or --cmd")
@@ -71,16 +75,27 @@ def cmd_lock(args):
             sys.argv = [script] + (args.script_args or [])
             try:
                 runpy.run_path(script, run_name="__main__")
-            except SystemExit:
-                pass
+            except SystemExit as exc:
+                # A nonzero exit is how a script says it failed — an argparse
+                # error, a `sys.exit(main())`, a test runner.  Swallowing it
+                # made a driver that died after one of its ten calls print
+                # exactly what one that ran to the end prints, on exit 0.
+                if exc.code not in (0, None):
+                    partial = "the recording run did not finish: the script " \
+                              "exited {}".format(exc.code)
             except Exception as exc:
-                print("stillworks: script raised {}: {} (recorded calls up to "
-                      "that point are kept)".format(type(exc).__name__, exc),
-                      file=sys.stderr)
+                partial = "the recording run did not finish: the script " \
+                          "raised {}: {}".format(type(exc).__name__, exc)
             finally:
                 sys.argv = old_argv
         records.extend(rec.records)
         skipped += rec.skipped_unpicklable
+        if partial:
+            print("stillworks: {}\n"
+                  "  (the {} call(s) recorded before that are kept — whatever "
+                  "the script would\n   have exercised afterwards is not in "
+                  "this baseline)".format(partial, len(rec.records)),
+                  file=sys.stderr)
 
     if args.fuzz and mod is not None:
         rng = random.Random(args.seed)
@@ -137,6 +152,7 @@ def cmd_lock(args):
 
     lock = core.new_lock(module_info, args.seed)
     lock["records"] = records
+    lock["partial"] = partial
     try:
         core.save_lock(project, lock)
     except OSError as exc:
@@ -216,6 +232,14 @@ def cmd_check(args):
                   "seeded call, or an")
             print("         end-to-end run with `--cmd` — or this check cannot "
                   "fail.")
+        if result.get("partial"):
+            # Said on every check, not once at lock time, because the lockfile
+            # outlives the terminal it was made in — and the verdict above is
+            # about however much of the code the driver got to before it died.
+            print("         {}.".format(_one_row(result["partial"])))
+            print("         Whatever it would have exercised afterwards is "
+                  "not covered here.")
+            print("         Re-lock once the script runs to the end.")
     if result["verified"] == 0:
         # Not 1: behavior did not change, because nothing looked.  2 is this
         # tool's word for "this did not work", and is what `lock` returns when
@@ -352,6 +376,8 @@ def cmd_status(args):
         print("flagged:  {} nondeterministic".format(n_nondet))
     if lock.get("history"):
         print("history:  {} accepted changes".format(len(lock["history"])))
+    if lock.get("partial"):
+        print("partial:  {}".format(_one_row(lock["partial"])))
     return 0
 
 

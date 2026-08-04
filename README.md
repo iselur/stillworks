@@ -210,6 +210,27 @@ the same recorded values is worth exactly as much.
   with a marker saying how much was dropped; `--json` always has the whole
   thing. The Markdown report flattens for the same reason: a newline inside a
   backtick span there starts a new bullet under **Differences**.
+- **A baseline recorded from a run that died partway says so.** `--run`
+  keeps the calls a driver script made before it stopped, which is worth
+  keeping — but a driver that ends in `sys.exit(1)` after one of its ten
+  calls used to print exactly what one that ran to the end prints, on exit
+  `0`, with nothing on stderr. The nine missing calls left no trace anywhere,
+  and the lockfile is committed and read for months afterwards, by which time
+  the terminal is long gone. Now both endings — a nonzero exit and an
+  exception — are named at lock time *and* written into `lock.json`, so
+  `check`, `status` and the report all repeat it next to the verdict:
+
+  ```
+  STILL WORKS: 1 records — 1 OK
+           the recording run did not finish: the script exited 1.
+           Whatever it would have exercised afterwards is not covered here.
+           Re-lock once the script runs to the end.
+  ```
+
+  The verdict itself stands and the exit stays `0`: that one record really
+  was replayed and really did reproduce. It is true, just narrower than it
+  was meant to be. A driver that exits `0` or falls off the end is the
+  ordinary case and is silent.
 - **An empty gate is not a passing gate.** `lock` replays every record once
   and flags the ones that don't reproduce, and `check` excludes those. If
   *every* record gets flagged — a module whose functions all read the clock or

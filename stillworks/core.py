@@ -642,6 +642,12 @@ def new_lock(module_info, seed):
         "seed": seed,
         "records": [],
         "history": [],
+        # Why the recording run stopped short, if it did.  Always present, so
+        # that "" is a statement — this baseline is everything it was meant to
+        # be — rather than a key nobody got round to writing.  Lockfiles from
+        # before this field are read as unknown and say nothing, which is the
+        # honest answer for them.
+        "partial": "",
     }
 
 
@@ -783,6 +789,12 @@ def check(project_dir):
         and counts.get("CHANGED", 0) == 0 and counts.get("GONE", 0) == 0 \
         and counts.get("BROKEN", 0) == 0
     out = {"ok": ok, "verified": verified, "counts": counts, "results": results,
+           # Carried through from the lockfile rather than re-derived, because
+           # it is a fact about how the baseline was made and this run cannot
+           # see it any other way.  It does not change `ok`: every record here
+           # was really replayed, so the verdict is true — only narrower than
+           # it was meant to be, and that is what gets said out loud.
+           "partial": lock.get("partial") or "",
            "checked": time.strftime("%Y-%m-%dT%H:%M:%S")}
     # Persist a receipt of this run, for `accept` and `report` to read.
     #
