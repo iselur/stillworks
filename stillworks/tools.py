@@ -89,12 +89,36 @@ def _version_of(command: str) -> Optional[str]:
         )
     except (OSError, subprocess.SubprocessError):
         return "?"
+    # `--version` exits 0.  Anything else means the command did not answer the
+    # question — most often a sibling from before the flag existed, where
+    # argparse prints a usage error and exits 2.  That error text carries
+    # numbers of its own ("expected 1 argument"), and scraping one of those
+    # used to put a confident `1` in the version column next to four correct
+    # ones.  Nothing in the output said it was wrong.  Unknown is the honest
+    # answer, and the command is still installed either way.
+    if out.returncode != 0:
+        return "?"
     text = (out.stdout or b"").decode("utf-8", "replace").strip()
     if not text:
         return "?"
-    # Conventional output is "agentlog 0.2.0"; take the last token that starts
-    # with a digit so a prefixed program name does not end up in the column.
-    for token in reversed(text.split()):
+    return _scrape_version(text)
+
+
+# Punctuation a version can be wrapped in when a program dresses up its output:
+# "agentdiff [0.1.2]", "agentdiff version 0.1.2.".  None of it is the number.
+_LEFT = "([{<'\"vV"
+_RIGHT = ")]}>'\",.;:"
+
+
+def _scrape_version(text: str) -> str:
+    """The tool's own version out of a line like "agentdiff 0.1.2"."""
+    # Forwards, not backwards.  The first number after the program name is the
+    # program's version; later ones belong to something else.  A `--version`
+    # string of the common form "agentdiff 0.1.2 (python 3.11.4)" read
+    # backwards reports the interpreter's version as the tool's, which looks
+    # exactly like a correct answer.
+    for token in text.split():
+        token = token.lstrip(_LEFT).rstrip(_RIGHT)
         if token[:1].isdigit():
             return token
     return "?"

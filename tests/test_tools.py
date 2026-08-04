@@ -31,13 +31,13 @@ class TestVersionOf(unittest.TestCase):
         tools.shutil.which = self._which
         tools.subprocess.run = self._run
 
-    def _fake(self, found, stdout=b"", exc=None):
+    def _fake(self, found, stdout=b"", exc=None, returncode=0):
         tools.shutil.which = lambda c: "/usr/bin/" + c if found else None
 
         def run(*a, **kw):
             if exc:
                 raise exc
-            return types.SimpleNamespace(stdout=stdout)
+            return types.SimpleNamespace(stdout=stdout, returncode=returncode)
         tools.subprocess.run = run
 
     def test_stillworks_reports_its_own_running_version(self):
