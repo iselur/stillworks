@@ -197,6 +197,17 @@ the same recorded values is worth exactly as much.
   stored verbatim, and unpickling arguments runs code too. So `stillworks
   check` on a repo you just cloned is `make` on a repo you just cloned — read
   `.stillworks/lock.json` first if you would not run its `Makefile`.
+- **One record is one row.** Everything `check` prints — the id, the target,
+  the note, the arguments, the before and after — is read back out of the
+  lockfile, and that file is committed, shared, and the one file an agent
+  working in the repo can rewrite. So every value is flattened to a single
+  line first. Otherwise a target containing a newline printed as several rows,
+  and the extra ones look exactly like verdicts stillworks reached — `OK`
+  rows for records that were never replayed, in the one command whose job is
+  to say whether behavior is intact. Long values are cut at 400 characters
+  with a marker saying how much was dropped; `--json` always has the whole
+  thing. The Markdown report flattens for the same reason: a newline inside a
+  backtick span there starts a new bullet under **Differences**.
 - A lockfile that ships in the repo also gets merged. A `lock.json` with a
   conflict left in it — or one truncated by a `lock` that ran out of disk — is
   an error naming the file, exit 2, not a `check` verdict and not the same

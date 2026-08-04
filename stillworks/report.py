@@ -8,6 +8,7 @@ import platform
 import sys
 
 from . import core
+from .cli import _one_row
 
 
 def build(project_dir):
@@ -23,8 +24,8 @@ def build(project_dir):
     if lock.get("module"):
         target = lock["module"].get("path") or lock["module"].get("module") or ""
     if target:
-        lines.append("**Target:** `{}`".format(target))
-    lines.append("**Baseline locked:** {}".format(lock["created"]))
+        lines.append("**Target:** `{}`".format(_one_row(target)))
+    lines.append("**Baseline locked:** {}".format(_one_row(lock["created"])))
     records = lock["records"]
     n_calls = sum(1 for r in records if r["kind"] == "call")
     n_cmds = sum(1 for r in records if r["kind"] == "cmd")
@@ -63,12 +64,17 @@ def build(project_dir):
         if diffs:
             lines.append("### Differences")
             lines.append("")
+            # Same rule as the `check` rows, for the same reason: these values
+            # come out of the lockfile, and in Markdown a newline inside a
+            # backtick span ends the span and starts a new bullet — one that
+            # reads exactly like a difference this report found.
             for e in diffs:
-                lines.append("- **{}** `{}`".format(e["status"], e["id"]))
+                lines.append("- **{}** `{}`".format(
+                    _one_row(e["status"]), _one_row(e["id"])))
                 if e["status"] == "CHANGED" and e.get("kind") == "call":
-                    lines.append("  - args: `{}`".format(e.get("args", "")))
-                    lines.append("  - was: `{}`".format(e["was"].get("repr")))
-                    lines.append("  - now: `{}`".format(e["now"].get("repr")))
+                    lines.append("  - args: `{}`".format(_one_row(e.get("args", ""))))
+                    lines.append("  - was: `{}`".format(_one_row(e["was"].get("repr"))))
+                    lines.append("  - now: `{}`".format(_one_row(e["now"].get("repr"))))
                 elif e["status"] == "CHANGED":
                     was, now = e.get("was", {}), e.get("now", {})
                     if was.get("exit") != now.get("exit"):
@@ -78,7 +84,7 @@ def build(project_dir):
                         if was.get(stream) != now.get(stream):
                             lines.append("  - {} changed".format(stream))
                 elif e.get("note"):
-                    lines.append("  - {}".format(e["note"]))
+                    lines.append("  - {}".format(_one_row(e["note"])))
             lines.append("")
     else:
         lines.append("_No check has been run yet — run `stillworks check`._")
@@ -89,10 +95,11 @@ def build(project_dir):
         lines.append("")
         for h in lock["history"]:
             lines.append("- {} — `{}`: {}".format(
-                h.get("when", "?"), h.get("id", "?"), h.get("action", "")))
+                _one_row(h.get("when", "?")), _one_row(h.get("id", "?")),
+                _one_row(h.get("action", ""))))
             if "was" in h and "now" in h:
-                lines.append("  - was: `{}`".format(h["was"].get("repr")))
-                lines.append("  - now: `{}`".format(h["now"].get("repr")))
+                lines.append("  - was: `{}`".format(_one_row(h["was"].get("repr"))))
+                lines.append("  - now: `{}`".format(_one_row(h["now"].get("repr"))))
         lines.append("")
 
     lines.append("## Environment")
