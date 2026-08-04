@@ -199,8 +199,28 @@ def cmd_check(args):
                 print("         {}".format(_one_row(e["note"])))
         total = sum(counts.values())
         summary = ", ".join("{} {}".format(v, k) for k, v in sorted(counts.items()))
-        verdict = "STILL WORKS" if result["ok"] else "BEHAVIOR CHANGED"
+        if result["verified"] == 0:
+            verdict = "NOTHING VERIFIED"
+        elif result["ok"]:
+            verdict = "STILL WORKS"
+        else:
+            verdict = "BEHAVIOR CHANGED"
         print("{}: {} records — {}".format(verdict, total, summary))
+        if result["verified"] == 0:
+            # The one line that said this would happen was printed by `lock`,
+            # days ago, and scrolled past.  Say it here, where the answer is
+            # being read, and say what to do about it.
+            print("         every record was flagged nondeterministic at lock "
+                  "time, so nothing")
+            print("         was compared.  Lock something that settles — a "
+                  "seeded call, or an")
+            print("         end-to-end run with `--cmd` — or this check cannot "
+                  "fail.")
+    if result["verified"] == 0:
+        # Not 1: behavior did not change, because nothing looked.  2 is this
+        # tool's word for "this did not work", and is what `lock` returns when
+        # it declines to write a lockfile with nothing in it.
+        return 2
     return 0 if result["ok"] else 1
 
 

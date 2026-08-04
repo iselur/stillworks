@@ -760,9 +760,29 @@ def check(project_dir):
     counts = {}
     for e in results:
         counts[e["status"]] = counts.get(e["status"], 0) + 1
-    ok = counts.get("CHANGED", 0) == 0 and counts.get("GONE", 0) == 0 \
+
+    # How many records this run actually compared against the code.
+    #
+    # SKIP is the one status that is not a verdict: the record was flagged
+    # nondeterministic at lock time and never replayed.  Every other status —
+    # including GONE and BROKEN — is something this run went and found out.
+    #
+    # `ok` used to ask only whether anything had CHANGED, GONE or BROKEN, which
+    # is true of a run that compared nothing at all.  A module of clock- and
+    # RNG-reading functions locks entirely to SKIP, and `check` then said STILL
+    # WORKS about it, on exit 0, forever — including after the module had been
+    # rewritten so that one function raised and the other returned a string.
+    # A gate that cannot go red is not a gate, and this one said so in green.
+    #
+    # `lock` already refuses to write an empty lockfile rather than leave a
+    # check that passes by having nothing to check.  A lockfile whose records
+    # are all excluded is that same emptiness arriving later, so it gets the
+    # same answer.  One verified record is a real check and keeps its verdict.
+    verified = len(results) - counts.get("SKIP", 0)
+    ok = verified > 0 \
+        and counts.get("CHANGED", 0) == 0 and counts.get("GONE", 0) == 0 \
         and counts.get("BROKEN", 0) == 0
-    out = {"ok": ok, "counts": counts, "results": results,
+    out = {"ok": ok, "verified": verified, "counts": counts, "results": results,
            "checked": time.strftime("%Y-%m-%dT%H:%M:%S")}
     # Persist a receipt of this run, for `accept` and `report` to read.
     #

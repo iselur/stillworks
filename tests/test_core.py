@@ -424,6 +424,32 @@ class TestCheck(unittest.TestCase):
             self.assertEqual(result["counts"].get("GONE", 0), 1)
 
     def test_skip_nondet(self):
+        # SKIP does not count as a failure — a flagged record sitting beside a
+        # verified one must not drag the verdict down.  It is also not a pass
+        # on its own: this used to be written with the SKIP as the lockfile's
+        # only record, which asserted that a run comparing nothing was `ok`.
+        # See test_only_skip_is_not_a_pass, and the note in core.check.
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with open(os.path.join(tmpdir, "target.py"), "w") as f:
+                f.write("def fn(): return 1\n")
+            skipped = _call_record(
+                "fn", (), {},
+                {"kind": "value", "canon": core.canon(1), "repr": "1"},
+                "fn#1", nondet=True)
+            checked = _call_record(
+                "fn", (), {},
+                {"kind": "value", "canon": core.canon(1), "repr": "1"}, "fn#2")
+            _build_lock(tmpdir, [skipped, checked])
+            result = core.check(tmpdir)
+            self.assertTrue(result["ok"])
+            self.assertEqual(result["counts"].get("SKIP", 0), 1)
+            self.assertEqual(result["counts"].get("OK", 0), 1)
+            self.assertEqual(result["verified"], 1)
+
+    def test_only_skip_is_not_a_pass(self):
+        # Every record excluded means nothing was compared, and `ok` is the
+        # field CI reads.  The module below could be rewritten to raise and
+        # this run would look identical.
         with tempfile.TemporaryDirectory() as tmpdir:
             with open(os.path.join(tmpdir, "target.py"), "w") as f:
                 f.write("def fn(): return 1\n")
@@ -432,8 +458,8 @@ class TestCheck(unittest.TestCase):
                                "fn#1", nondet=True)
             _build_lock(tmpdir, [rec])
             result = core.check(tmpdir)
-            self.assertTrue(result["ok"])   # SKIP does not count as failure
-            self.assertEqual(result["counts"].get("SKIP", 0), 1)
+            self.assertEqual(result["verified"], 0)
+            self.assertFalse(result["ok"])
 
     def test_broken_status_module_load_error(self):
         with tempfile.TemporaryDirectory() as tmpdir:

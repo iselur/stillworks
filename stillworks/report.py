@@ -41,8 +41,19 @@ def build(project_dir):
         lines.append("## Last verification ({})".format(last.get("checked", "?")))
         lines.append("")
         counts = last.get("counts", {})
-        verdict = "PASS — behavior unchanged" if last.get("ok") \
-            else "FAIL — behavior differs from baseline"
+        # Derived from the counts rather than read from the receipt, so that a
+        # receipt written by an older version — one that had no `verified`
+        # field and would happily call an all-SKIP run a PASS — is described
+        # honestly by this report.  SKIP is the only status that is not a
+        # verdict; see the note in core.check.
+        verified = sum(v for k, v in counts.items() if k != "SKIP")
+        if verified == 0:
+            verdict = ("NOT A RESULT — every record was excluded, nothing was "
+                       "compared")
+        elif last.get("ok"):
+            verdict = "PASS — behavior unchanged"
+        else:
+            verdict = "FAIL — behavior differs from baseline"
         lines.append("**Verdict:** {}".format(verdict))
         lines.append("")
         lines.append("| status | count | meaning |")

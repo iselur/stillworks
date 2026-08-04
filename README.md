@@ -38,10 +38,12 @@ Exit code `1` — the merge gate closes. If the change was intentional:
 `stillworks accept apply_discount#3`, and it becomes the new baseline.
 
 The other codes exist so nothing can impersonate that one: `0` nothing
-moved, `2` the lockfile is unreadable, `130` stopped by ctrl-c, `141` the
-reader hung up (`stillworks check | head`, or `| less` quit with `q`). The
-last two mean the check never finished comparing, which is neither a pass
-nor a fail — and `stillworks check && deploy` needs to be able to tell.
+moved, `2` the check could not be made — the lockfile is unreadable, or
+every record in it was excluded so nothing was compared — `130` stopped by
+ctrl-c, `141` the reader hung up (`stillworks check | head`, or `| less`
+quit with `q`). All of those mean the check never finished comparing, which
+is neither a pass nor a fail — and `stillworks check && deploy` needs to be
+able to tell.
 
 For the same reason, a read-only `.stillworks` does not fail the check. The
 comparison is the verdict; saving a receipt of it for `accept` and `report`
@@ -208,6 +210,14 @@ the same recorded values is worth exactly as much.
   with a marker saying how much was dropped; `--json` always has the whole
   thing. The Markdown report flattens for the same reason: a newline inside a
   backtick span there starts a new bullet under **Differences**.
+- **An empty gate is not a passing gate.** `lock` replays every record once
+  and flags the ones that don't reproduce, and `check` excludes those. If
+  *every* record gets flagged — a module whose functions all read the clock or
+  the RNG — then `check` compares nothing, and it says `NOTHING VERIFIED` and
+  exits 2 rather than `STILL WORKS` and 0. It used to say the second one,
+  which meant a check that stayed green after the module had been rewritten to
+  raise. The way out is to lock something that settles: a seeded call, or an
+  end-to-end `--cmd`. One verified record is a real check and passes normally.
 - A lockfile that ships in the repo also gets merged. A `lock.json` with a
   conflict left in it — or one truncated by a `lock` that ran out of disk — is
   an error naming the file, exit 2, not a `check` verdict and not the same
