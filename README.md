@@ -35,7 +35,10 @@ BEHAVIOR CHANGED: 24 records — 1 CHANGED, 23 OK
 ```
 
 Exit code `1` — the merge gate closes. If the change was intentional:
-`stillworks accept apply_discount#3`, and it becomes the new baseline.
+`stillworks accept apply_discount#3`, and it becomes the new baseline. Name
+each record you mean; `stillworks accept --all` blesses every change in one
+go, which is the right answer after a rewrite you have already read and the
+wrong one at any other time.
 
 The other codes exist so nothing can impersonate that one: `0` nothing
 moved, `2` the check could not be made — the lockfile is unreadable, or
@@ -91,6 +94,15 @@ existing baseline and warns when it does):
 ```bash
 stillworks lock src/mod.py --fuzz 8 --run scripts/daily.py --cmd "make summary"
 ```
+
+Three more knobs on `lock`, all about how long recording takes and whether it
+comes out the same twice:
+
+| | |
+|---|---|
+| `--seed N` | the seed the sampled inputs come from (default 1234). Same seed, same inputs — which is why a lockfile made on your laptop replays on CI. Change it to widen what gets tried, and expect a fresh baseline. |
+| `--max N` | stop after N records. A module with forty annotated functions makes a slow `check`; this caps it. |
+| `--timeout SECONDS` | how long any single recorded command or call gets before it is abandoned. Without it, one hung `--cmd` hangs the lock. |
 
 Exceptions are recorded as behavior too: if `divide(1, 0)` raises
 `ZeroDivisionError` today, a refactor that silently returns `0` is a
@@ -156,6 +168,10 @@ checkout works as-is:
 git clone https://github.com/iselur/stillworks && PYTHONPATH=stillworks python3 -m stillworks --help
 # or: pipx install stillworks
 ```
+
+`stillworks --version` prints the version, which is the thing to quote in a
+bug report — a lockfile is written by one version and replayed by another,
+and the two are not always the same install.
 
 ## Prior art (and what's different)
 
