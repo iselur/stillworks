@@ -134,9 +134,9 @@ trust the merge. (`report` without `-o` prints to stdout.) All commands take
 ```
 $ stillworks tools
   stillworks  0.1.3  record what your code does now, catch when it changes
-  unedit      0.1.3  a safety net for letting an agent loose on your files
+  unedit      0.1.4  a safety net for letting an agent loose on your files
   agentdiff   —      see what the agent actually changed, before you merge
-  agentlog    0.2.2  what did your coding agent actually do today?
+  agentlog    0.2.4  what did your coding agent actually do today?
   agentwatch  0.1.0  tail what your agent is doing, right now
 
   missing: agentdiff
