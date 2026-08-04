@@ -85,7 +85,11 @@ TOOLS = [
 
 def _run_cli(cli_args, project_dir):
     cmd = [sys.executable, "-m", "stillworks", "--project", project_dir] + cli_args
-    proc = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
+    # Our own CLI on the other end, writing UTF-8 — see cli.main.  Letting the
+    # locale choose the codec here means an agent asking why a check failed
+    # gets a decode error instead of the answer.
+    proc = subprocess.run(cmd, capture_output=True, text=True,
+                          encoding="utf-8", errors="replace", timeout=600)
     out = proc.stdout
     if proc.stderr:
         out = out + ("\n" if out else "") + proc.stderr

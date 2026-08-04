@@ -12,6 +12,7 @@ Commands:
 from __future__ import annotations
 
 import argparse
+import codecs
 import json
 import os
 import random
@@ -328,7 +329,30 @@ def build_parser():
     return p
 
 
+def _write_utf8_if_the_locale_said_nothing():
+    """Write UTF-8 when the machine claims it can only take ASCII.
+
+    A container with no locale set — a Dockerfile without ``ENV LANG``, cron,
+    most of CI — leaves Python believing stdout is ASCII, and then a single em
+    dash of our own raises ``UnicodeEncodeError`` halfway through a listing:
+    a traceback and half a screen, over a character no one chose.
+
+    An ASCII claim is not a claim about the terminal, though.  It is the
+    absence of one, and the terminal on the other end is virtually always
+    UTF-8.  So we write UTF-8 and keep ``surrogateescape``, which hands back
+    unchanged the bytes of any filename this machine could not decode — that is
+    what makes a name it cannot spell come out spelled right anyway.
+    """
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if codecs.lookup(stream.encoding or "").name == "ascii":
+                stream.reconfigure(encoding="utf-8", errors="surrogateescape")
+        except (AttributeError, LookupError, OSError, ValueError):
+            pass                        # not a real stream, or already written to
+
+
 def main(argv=None):
+    _write_utf8_if_the_locale_said_nothing()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

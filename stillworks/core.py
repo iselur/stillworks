@@ -523,6 +523,14 @@ def run_cmd(cmd, cwd=None, timeout=DEFAULT_CMD_TIMEOUT):
     try:
         proc = subprocess.run(
             argv, cwd=cwd, capture_output=True, text=True,
+            # A lockfile is carried: recorded on a laptop, replayed in CI.
+            # `text=True` alone would let each machine's locale pick the codec,
+            # so the same command records differently in a container with no
+            # `LANG` and `check` reports a change that never happened.  UTF-8
+            # is what compilers and test runners emit whatever the locale says;
+            # `replace` because output we cannot decode is still a recording,
+            # and it is at least the same one on every machine.
+            encoding="utf-8", errors="replace",
             timeout=timeout,
         )
         return {"exit": proc.returncode,
