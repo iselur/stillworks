@@ -377,7 +377,45 @@ def _run(argv=None):
     if not getattr(args, "command", None):
         parser.print_help()
         return 0
+
+    problem = _whats_wrong_with_the_project_dir(args)
+    if problem:
+        print("stillworks: {}".format(problem), file=sys.stderr)
+        return 2
+
     return args.func(args)
+
+
+# The commands that actually operate on a project directory — the ones built
+# with the `common` parent, which is where `--project` comes from.  `tools`
+# reports what is on your PATH and `mcp` takes a project per request, so
+# neither has an opinion about this directory.
+_COMMANDS_THAT_USE_THE_PROJECT = frozenset(
+    ("lock", "check", "accept", "report", "status"))
+
+
+def _whats_wrong_with_the_project_dir(args):
+    """The reason to stop before running, or None.
+
+    A `--project` that is not there used to be made rather than questioned:
+    `stillworks --project ~/aap lock` created `~/aap/.stillworks/` and said
+    `locked 1 records`, so the typo looked like a success while the project it
+    was meant to guard stayed unlocked.  The reading commands had the mirror
+    problem — `check` on a path that does not exist answered `no lockfile — run
+    stillworks lock first`, which is what an un-locked project says.  Together
+    those two make a loop that never mentions the real mistake.
+
+    Only a named directory can be wrong this way; the default is the current
+    directory, which exists by definition.
+    """
+    if args.command not in _COMMANDS_THAT_USE_THE_PROJECT:
+        return None
+    project = getattr(args, "project", ".")
+    if os.path.isdir(project):
+        return None
+    if os.path.exists(project):
+        return "not a directory: {}".format(project)
+    return "no such directory: {}".format(project)
 
 
 if __name__ == "__main__":
