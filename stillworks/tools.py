@@ -1,7 +1,7 @@
 """`stillworks tools` — what of the family is installed, and what is missing.
 
-The four tools ship as four independent distributions on purpose, so nothing
-here may import a sibling: that would turn an optional extra into a real
+The tools ship as independent distributions on purpose, so nothing here may
+import a sibling: that would turn an optional extra into a real
 dependency the first time someone forgot a try/except.  Detection is done from
 the outside instead — find the command on PATH, ask it for its version — which
 is also what the user would do by hand.
@@ -18,7 +18,7 @@ from typing import List, Optional, Tuple
 from . import __version__
 
 # command, PyPI distribution, one-line pitch.  The distribution name is only
-# shown when something is missing, because two of the four had to take a
+# shown when something is missing, because two of them had to take a
 # suffixed name and the whole point of the `[all]` extra is that nobody has to
 # learn them.
 FAMILY: List[Tuple[str, str, str]] = [
@@ -30,7 +30,20 @@ FAMILY: List[Tuple[str, str, str]] = [
      "see what the agent actually changed, before you merge"),
     ("agentlog", "agentlog-tool",
      "what did your coding agent actually do today?"),
+    ("agentwatch", "agentwatch",
+     "tail what your agent is doing, right now"),
 ]
+
+# Spelled rather than printed as a digit, because the sentence reads better and
+# because it is the one place the count appears: writing "five" into the strings
+# below is how you end up shipping "all four installed" from a family of five.
+_COUNTS = {2: "both", 3: "all three", 4: "all four", 5: "all five",
+           6: "all six", 7: "all seven", 8: "all eight"}
+
+
+def _count(n: int) -> str:
+    return _COUNTS.get(n, "all {}".format(n))
+
 
 _TIMEOUT_S = 5
 
@@ -38,11 +51,11 @@ _TIMEOUT_S = 5
 def _neighbour(command: str) -> Optional[str]:
     """The sibling installed beside this stillworks, if there is one.
 
-    `pip install 'stillworks[all]'` puts all four in one environment, so the
-    copy next to our own interpreter is the copy that install produced.  PATH
-    may well hold an older one from somewhere else — a pipx install, a system
-    package — and reporting that tells somebody who just installed the family
-    that they still have the version they replaced.
+    `pip install 'stillworks[all]'` puts the whole family in one environment, so
+    the copy next to our own interpreter is the copy that install produced.
+    PATH may well hold an older one from somewhere else — a pipx install, a
+    system package — and reporting that tells somebody who just installed the
+    family that they still have the version they replaced.
     """
     bindir = os.path.dirname(os.path.abspath(sys.executable or ""))
     if not bindir:
@@ -99,16 +112,18 @@ def render(rows: List[Tuple[str, str, str, Optional[str]]]) -> str:
     missing = [(c, d) for c, d, _p, v in rows if v is None]
     lines.append("")
     if not missing:
-        lines.append("  all four installed")
+        lines.append("  {} installed".format(_count(len(rows))))
     elif len(missing) == len(rows) - 1:
         # Everything but stillworks itself: the extra is the whole answer.
         lines.append("  missing: {}".format(", ".join(c for c, _ in missing)))
-        lines.append("  install all four:  pip install 'stillworks[all]'")
+        lines.append("  install {}:  pip install 'stillworks[all]'"
+                     .format(_count(len(rows))))
     else:
         lines.append("  missing: {}".format(", ".join(c for c, _ in missing)))
         lines.append("  install:  pip install {}".format(
             " ".join(d for _, d in missing)))
-        lines.append("  or all four:  pip install 'stillworks[all]'")
+        lines.append("  or {}:  pip install 'stillworks[all]'"
+                     .format(_count(len(rows))))
     return "\n".join(lines)
 
 

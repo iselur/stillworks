@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillworks"
-version = "0.1.2"
+version = "0.1.3"
 description = "Take a snapshot of what your code does, then see if your edit moved anything. For code with no tests. Zero dependencies."
 readme = "README.md"
 license = { text = "MIT" }
@@ -23,14 +23,15 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-# The other three tools in the family.  They stay separate distributions —
-# independent versions, and `pip install stillworks` keeps its zero-dependency
-# promise — but nobody should have to memorise two suffixed PyPI names, so
+# The rest of the family.  They stay separate distributions — independent
+# versions, and `pip install stillworks` keeps its zero-dependency promise —
+# but nobody should have to memorise two suffixed PyPI names, so
 # `pip install 'stillworks[all]'` hides them here.
 all = [
-  "unedit>=0.1.2",
-  "agentdiff-cli>=0.1.1",
-  "agentlog-tool>=0.2.1",
+  "unedit>=0.1.3",
+  "agentdiff-cli>=0.1.2",
+  "agentlog-tool>=0.2.2",
+  "agentwatch>=0.1.0",
 ]
 
 [project.scripts]

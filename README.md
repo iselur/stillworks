@@ -18,7 +18,7 @@ agent can use it** (Claude Code, Codex, OpenCode, Cursor, aider — anything
 that can run a shell command). Python ≥ 3.9, stdlib only, MIT license.
 
 ```bash
-pip install 'stillworks[all]'   # all four agent tools (see below)
+pip install 'stillworks[all]'   # all five agent tools (see below)
 pip install stillworks          # or just this one, zero dependencies
 
 stillworks lock src/pricing.py --fuzz 8   # before: record real behavior
@@ -118,14 +118,15 @@ trust the merge. (`report` without `-o` prints to stdout.) All commands take
 
 ```
 $ stillworks tools
-  stillworks  0.1.1  record what your code does now, catch when it changes
-  unedit      0.1.1  a safety net for letting an agent loose on your files
+  stillworks  0.1.3  record what your code does now, catch when it changes
+  unedit      0.1.3  a safety net for letting an agent loose on your files
   agentdiff   —      see what the agent actually changed, before you merge
-  agentlog    0.2.0  what did your coding agent actually do today?
+  agentlog    0.2.2  what did your coding agent actually do today?
+  agentwatch  0.1.0  tail what your agent is doing, right now
 
   missing: agentdiff
   install:  pip install agentdiff-cli
-  or all four:  pip install 'stillworks[all]'
+  or all five:  pip install 'stillworks[all]'
 ```
 
 It finds the others on your PATH and asks each for its version — it never
@@ -193,16 +194,18 @@ didn't intend, on code that has nothing else guarding it.**
 
 ## Part of a small family
 
-Four tools for working with coding agents, same house style: zero dependencies,
-MIT, no API key, nothing leaves your machine. None of them call a model — that is
-the point, since the thing being checked already is one.
+Five tools for working with coding agents, same house style: zero
+dependencies, MIT, no API key, nothing leaves your machine. None of them
+call a model — that is the point, since the thing being checked already is
+one.
 
 - [stillworks](https://github.com/iselur/stillworks) — record what your code does now, catch when it changes later  ← you are here
 - [agentdiff](https://github.com/iselur/agentdiff) — see what the agent actually changed, before you merge
 - [agentlog](https://github.com/iselur/agentlog) — what did your coding agent actually do today?
+- [agentwatch](https://github.com/iselur/agentwatch) — tail what your agent is doing, right now
 - [unedit](https://github.com/iselur/unedit) — a safety net for letting an agent loose on your files
 
-One install gets all four, and `stillworks tools` says which ones you have:
+One install gets all five, and `stillworks tools` says which ones you have:
 
 ```sh
 pip install 'stillworks[all]'

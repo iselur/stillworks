@@ -144,12 +144,20 @@ class TestRender(unittest.TestCase):
         self.assertIn("—", out)
 
     def test_all_present_says_so_and_offers_nothing(self):
-        out = tools.render(_rows(
-            stillworks="0.1.0", unedit="0.1.0",
-            agentdiff="0.1.0", agentlog="0.2.0"))
-        self.assertIn("all four installed", out)
+        # Built from FAMILY rather than a list of names: naming them here is how
+        # this test came to be asserting "all four" from a family of five.
+        out = tools.render([(c, d, p, "1.0") for c, d, p in tools.FAMILY])
+        self.assertIn("installed", out)
         self.assertNotIn("missing", out)
         self.assertNotIn("pip install", out)
+
+    def test_the_count_is_spelled_out_and_matches_the_family(self):
+        # The wording itself, pinned once — the test above deliberately does not
+        # care what the number is, and something has to.
+        self.assertEqual(tools._count(4), "all four")
+        self.assertEqual(tools._count(5), "all five")
+        out = tools.render([(c, d, p, "1.0") for c, d, p in tools.FAMILY])
+        self.assertIn("{} installed".format(tools._count(len(tools.FAMILY))), out)
 
     def test_partial_install_names_what_is_missing(self):
         out = tools.render(_rows(
