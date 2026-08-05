@@ -72,10 +72,12 @@ class TestTheVersionItReports(unittest.TestCase):
         # the promise is that the string a user pastes into a bug report is the
         # release they have.
         out = io.StringIO()
-        with self.assertRaises(SystemExit) as exit_code:
-            with redirect_stdout(out):
-                cli.main(["--version"])
-        self.assertEqual(exit_code.exception.code, 0)
+        with redirect_stdout(out):
+            code = cli.main(["--version"])
+        # argparse ends `--version` by raising `SystemExit(0)` from inside the
+        # standard library.  `main` catches it and hands the number back, so
+        # this is the same 0 the shell is given -- see shell.run_as_a_command.
+        self.assertEqual(code, 0)
         self.assertIn(packaged_version(), out.getvalue())
 
 

@@ -47,6 +47,7 @@ sys.path.insert(0, _ROOT)
 
 README = os.path.join(_ROOT, "README.md")
 CLI_SOURCE = os.path.join(_ROOT, "stillworks", "cli.py")
+SHELL_SOURCE = os.path.join(_ROOT, "stillworks", "shell.py")
 
 # "`0` nothing moved, `2` the check could not be made" — a backticked number
 # and nothing else, so `stillworks accept apply_discount#3` in the same
@@ -100,6 +101,31 @@ def documented_codes(text):
     return {int(code) for code in _DOCUMENTED.findall(passage)}
 
 
+def shell_codes():
+    """The codes `shell.py` chooses on its own -- the two it gives names to.
+
+    Everything else that module returns is a number this command picked and
+    handed back out, and those are counted in cli.py where they were picked.
+    These two are picked nowhere else.  They are also the two the README
+    documents that no longer appear in cli.py at all, so a reader that stops
+    at cli.py sees them vanish and calls that agreement.
+    """
+    with open(SHELL_SOURCE, encoding="utf-8") as handle:
+        tree = ast.parse(handle.read())
+    named = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, int)
+                and not isinstance(node.value.value, bool)):
+            named[node.targets[0].id] = node.value.value
+    returned = {node.value.id for node in ast.walk(tree)
+                if isinstance(node, ast.Return)
+                and isinstance(node.value, ast.Name)}
+    return {named[name] for name in returned & set(named)}
+
+
 def source_codes():
     """Every constant exit code cli.py produces."""
     with open(CLI_SOURCE, encoding="utf-8") as handle:
@@ -125,7 +151,7 @@ def source_codes():
                     and isinstance(value.value, int)
                     and not isinstance(value.value, bool)):
                 codes.add(value.value)
-    return codes
+    return codes | shell_codes()
 
 
 class TestTheExitCodesTheREADMEPromises(unittest.TestCase):

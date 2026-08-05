@@ -17,13 +17,13 @@ spelling of the same flag), so they are not repeated on each line.
 from __future__ import annotations
 
 import argparse
-import codecs
 import json
 import os
 import sys
 
 from . import __version__
 from . import store as _store
+from .shell import run_as_a_command
 
 
 def _err(msg: str, code: int = 2) -> int:
@@ -545,82 +545,34 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
-def _write_utf8_if_the_locale_said_nothing() -> None:
-    """Write UTF-8 when the machine claims it can only take ASCII.
 
-    A container with no locale set — a Dockerfile without ``ENV LANG``, cron,
-    most of CI — leaves Python believing stdout is ASCII, and then a single em
-    dash of our own raises ``UnicodeEncodeError`` halfway through a listing:
-    a traceback and half a screen, over a character no one chose.
-
-    An ASCII claim is not a claim about the terminal, though.  It is the
-    absence of one, and the terminal on the other end is virtually always
-    UTF-8.  So we write UTF-8 and keep ``surrogateescape``, which hands back
-    unchanged the bytes of any filename this machine could not decode — that is
-    what makes a name it cannot spell come out spelled right anyway.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            if codecs.lookup(stream.encoding or '').name == 'ascii':
-                stream.reconfigure(encoding='utf-8', errors='surrogateescape')
-        except (AttributeError, LookupError, OSError, ValueError):
-            pass                        # not a real stream, or already written to
-
-
-def main(argv=None) -> None:
-    """Entry point, and the one place ctrl-c is allowed to mean something.
+def main(argv=None) -> int:
+    """Entry point.  Returns the code the process should exit with.
 
     Snapshotting a large tree takes a moment, and interrupting a command that
     is taking longer than you expected is ordinary.  A traceback in reply reads
     especially badly out of this tool: people reach for it when something has
     already gone wrong, so a crash from the safety net is the last thing they
-    need to see.  130 is the shell's own spelling of "stopped by ctrl-c", and
-    it keeps `unedit save && rm -rf build` from deleting anything on the
-    strength of a snapshot that was never finished.
+    need to see.  Answering an interrupted run with 130 also keeps `unedit save
+    && rm -rf build` from deleting anything on the strength of a snapshot that
+    was never finished.
 
-    A closed pipe gets the same treatment.  `unedit diff | head` and `unedit
-    list | less` quit with `q` are ordinary, and both leave us writing into a
-    pipe nobody is reading; unhandled, that printed `Exception ignored in:
-    <_io.TextIOWrapper ...>` over the output, or a whole traceback out of
-    `diff`, which is the last thing a safety net should ever show you.  141 is
-    128 + SIGPIPE, the shell's spelling of "the reader hung up" — deliberately
-    not one of the answers, because a listing that got cut off told you
-    nothing about your snapshots.  The flush is in a `finally` because
-    argparse prints `--help` and `--version` and exits before `_run` sees
-    anything at all.
+    A closed pipe matters as much.  `unedit diff | head` and `unedit list |
+    less` quit with `q` are ordinary, and unhandled they printed `Exception
+    ignored in: <_io.TextIOWrapper ...>` over the output, or a whole traceback
+    out of `diff` — the last thing a safety net should ever show you.  A
+    listing that got cut off told you nothing about your snapshots, so it must
+    not come back as one of the answers either.
+
+    Both of those are `shell.run_as_a_command`, which is where the mechanism
+    lives and where the codes are named.  What is here is the reason this tool
+    in particular cannot afford to get them wrong.
     """
-    try:
-        try:
-            _run(argv)
-        finally:
-            sys.stdout.flush()
-    except KeyboardInterrupt:
-        sys.exit(130)
-    except BrokenPipeError:
-        _stop_writing_down_a_closed_pipe()
-        sys.exit(141)
-
-
-def _stop_writing_down_a_closed_pipe() -> None:
-    """Point stdout at nowhere, so nothing is left to fail on the way out.
-
-    Catching the `BrokenPipeError` is only half of it: whatever is still in the
-    buffer gets flushed again when the interpreter shuts down, too late for any
-    `except` of ours, and that second failure is what prints `Exception ignored
-    in: <_io.TextIOWrapper ...>` and turns the exit code into 120.  Redirecting
-    the file descriptor gives that flush somewhere harmless to go.
-    """
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
-    except (AttributeError, OSError, ValueError):
-        pass                            # not a real stream; nothing to protect
+    return run_as_a_command(_run, argv)
 
 
 
 def _run(argv=None) -> None:
-    _write_utf8_if_the_locale_said_nothing()
     parser = build_parser()
     args = parser.parse_args(argv)
 

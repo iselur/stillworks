@@ -12,7 +12,6 @@ Commands:
 from __future__ import annotations
 
 import argparse
-import codecs
 import json
 import os
 import random
@@ -20,6 +19,7 @@ import runpy
 import sys
 
 from . import __version__, core
+from .shell import run_as_a_command
 
 
 def _err(msg):
@@ -453,27 +453,6 @@ def build_parser():
     return p
 
 
-def _write_utf8_if_the_locale_said_nothing():
-    """Write UTF-8 when the machine claims it can only take ASCII.
-
-    A container with no locale set — a Dockerfile without ``ENV LANG``, cron,
-    most of CI — leaves Python believing stdout is ASCII, and then a single em
-    dash of our own raises ``UnicodeEncodeError`` halfway through a listing:
-    a traceback and half a screen, over a character no one chose.
-
-    An ASCII claim is not a claim about the terminal, though.  It is the
-    absence of one, and the terminal on the other end is virtually always
-    UTF-8.  So we write UTF-8 and keep ``surrogateescape``, which hands back
-    unchanged the bytes of any filename this machine could not decode — that is
-    what makes a name it cannot spell come out spelled right anyway.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            if codecs.lookup(stream.encoding or "").name == "ascii":
-                stream.reconfigure(encoding="utf-8", errors="surrogateescape")
-        except (AttributeError, LookupError, OSError, ValueError):
-            pass                        # not a real stream, or already written to
-
 
 def main(argv=None):
     """Entry point, and the one place ctrl-c is allowed to mean something.
@@ -485,49 +464,23 @@ def main(argv=None):
     The code matters more here than elsewhere, because these codes are already
     load-bearing: `check` exits 0 for unchanged and 1 for changed, and gets
     written as `stillworks check && deploy`.  An abandoned check must be
-    neither answer, so it is 130 — the shell's own spelling of "stopped by
-    ctrl-c".
+    neither answer, so it is 130.
 
     A closed pipe is the same argument, twice over.  `stillworks check | head`
     and `stillworks report | less` quit with `q` are ordinary ways to read a
     long list of records, and unhandled the first of those ended in a traceback
     and exit 1 — the code that means BEHAVIOR CHANGED.  A check that got cut
-    off compared nothing, so it answers 141: 128 + SIGPIPE, the shell's own
-    spelling of "the reader hung up".  The flush is in a `finally` because
-    argparse prints `--help` and `--version` and exits before `_run` runs.
+    off compared nothing, so it must not answer either of those either.
+
+    Both of those are `shell.run_as_a_command`, which is where the mechanism
+    lives and where the codes are named.  What is here is why this tool in
+    particular cannot afford to get them wrong.
     """
-    try:
-        try:
-            return _run(argv)
-        finally:
-            sys.stdout.flush()
-    except KeyboardInterrupt:
-        return 130
-    except BrokenPipeError:
-        _stop_writing_down_a_closed_pipe()
-        return 141
-
-
-def _stop_writing_down_a_closed_pipe():
-    """Point stdout at nowhere, so nothing is left to fail on the way out.
-
-    Catching the `BrokenPipeError` is only half of it: whatever is still in the
-    buffer gets flushed again when the interpreter shuts down, too late for any
-    `except` of ours, and that second failure is what prints `Exception ignored
-    in: <_io.TextIOWrapper ...>` and turns the exit code into 120.  Redirecting
-    the file descriptor gives that flush somewhere harmless to go.
-    """
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
-    except (AttributeError, OSError, ValueError):
-        pass                            # not a real stream; nothing to protect
+    return run_as_a_command(_run, argv)
 
 
 
 def _run(argv=None):
-    _write_utf8_if_the_locale_said_nothing()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):

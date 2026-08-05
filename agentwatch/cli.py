@@ -17,7 +17,6 @@ exit 1 — agentwatch reports what an agent is doing, it does not judge it.
 from __future__ import annotations
 
 import argparse
-import codecs
 import os
 import re
 import sys
@@ -28,6 +27,7 @@ from typing import List, Optional, Tuple
 from . import __version__
 from .events import KINDS
 from .follow import DEFAULT_STALE_S, Watcher
+from .shell import as_typed, run_as_a_command
 from .render import (
     day_rule, format_event, format_json, marks_for, terminal_width, use_color,
     write_line,
@@ -139,64 +139,6 @@ def _resolve_home(args, parser) -> str:
     return os.path.expanduser("~")
 
 
-def _as_typed(text: Optional[str]) -> Optional[str]:
-    """An argument in the form it was typed, not the form the locale allowed.
-
-    Python decodes ``sys.argv`` with the filesystem encoding, and on a machine
-    with no locale that encoding is ASCII — so ``--project 設定`` arrives as a
-    run of surrogates and matches nothing.  A filter that silently matches
-    nothing is the worst way for this to fail: it looks exactly like a quiet
-    afternoon.  ``os.fsencode`` gives the bytes back untouched, and the shell
-    that sent them was speaking UTF-8.
-    """
-    if text is None or text.isascii():
-        return text                     # the overwhelmingly common case
-    try:
-        return os.fsencode(text).decode("utf-8")
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return text
-
-
-def _write_utf8_if_the_locale_said_nothing() -> None:
-    """Write UTF-8 when the machine claims it can only take ASCII.
-
-    A container with no locale set — a Dockerfile without ``ENV LANG``, cron,
-    most of CI — leaves Python believing stdout is ASCII, and a watcher is
-    exactly what gets left running on a box like that.  Every path it prints
-    then comes out as a row of question marks, which is not a file anybody can
-    go and open, and under ``--json`` it is not a path the reading program can
-    use either.
-
-    An ASCII claim is not a claim about the terminal, though.  It is the
-    absence of one, and the terminal on the other end is virtually always
-    UTF-8.  So we write UTF-8 and keep ``surrogateescape``, which hands back
-    unchanged the bytes of any filename this machine could not decode — that is
-    what makes a name it cannot spell come out spelled right anyway.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            if codecs.lookup(stream.encoding or "").name == "ascii":
-                stream.reconfigure(encoding="utf-8", errors="surrogateescape")
-        except (AttributeError, LookupError, OSError, ValueError):
-            pass                        # not a real stream, or already written to
-
-
-def _stop_writing_down_a_closed_pipe() -> None:
-    """Point stdout at nowhere, so nothing is left to fail on the way out.
-
-    Catching the `BrokenPipeError` is only half of it: whatever is still in the
-    buffer gets flushed again when the interpreter shuts down, too late for any
-    `except` of ours, and that second failure is what prints `Exception ignored
-    in: <_io.TextIOWrapper ...>` and turns the exit code into 120.  Redirecting
-    the file descriptor gives that flush somewhere harmless to go.
-    """
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
-    except (AttributeError, OSError, ValueError):
-        pass                            # not a real stream; nothing to protect
-
 
 def main(argv: Optional[List[str]] = None) -> int:
     """Entry point.  Ctrl-c and a closed pipe both end the run here.
@@ -212,29 +154,18 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     A closed pipe is different again — `agentwatch --once | head` means the
     reader stopped reading while we still had lines to write, so the tail did
-    not finish.  141 is 128 + SIGPIPE, the shell's own spelling of that, and it
-    is what every other tool in the family answers now.
+    not finish, and it answers what every other tool in the family answers.
 
     Both live out here rather than around the polling loop, because argparse
     prints `--help` and `--version` and exits before the loop is ever built —
-    and those were the two that still leaked.
+    and those were the two that still leaked.  Out here now means
+    `shell.run_as_a_command`, which is where the mechanism lives and where the
+    codes are named.
     """
-    try:
-        try:
-            return _run(argv)
-        finally:
-            # Whatever was printed is still worth having.  It is only no longer
-            # allowed to call itself whole.
-            sys.stdout.flush()
-    except KeyboardInterrupt:
-        return 130
-    except BrokenPipeError:
-        _stop_writing_down_a_closed_pipe()
-        return 141
+    return run_as_a_command(_run, argv)
 
 
 def _run(argv: Optional[List[str]] = None) -> int:
-    _write_utf8_if_the_locale_said_nothing()
     parser = build_parser()
     args = parser.parse_args(argv)
 
@@ -266,7 +197,7 @@ def _run(argv: Optional[List[str]] = None) -> int:
         sources=_sources(args),
         since=since,
         stale_s=args.stale,
-        project=_as_typed(args.project),
+        project=as_typed(args.project),
     )
 
     marks = marks_for(sys.stdout)
@@ -298,7 +229,7 @@ def _run(argv: Optional[List[str]] = None) -> int:
         first = watcher.poll()
         shown = emit(first)
         if not args.json and shown == 0:
-            _note(_nothing_message(watcher, since, _as_typed(args.project)))
+            _note(_nothing_message(watcher, since, as_typed(args.project)))
         # After the "nothing" message, which it qualifies: "nothing new yet" is
         # a claim about the agent, and a locked log makes it a claim about
         # permissions instead.

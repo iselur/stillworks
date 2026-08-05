@@ -35,7 +35,6 @@ The tool never writes to or uploads the session logs.
 from __future__ import annotations
 
 import argparse
-import codecs
 import os
 import sys
 from datetime import date, datetime, timedelta, timezone
@@ -54,6 +53,7 @@ from .render import (
 )
 from .html import render_html
 from .window import Unparseable, Window
+from .shell import as_typed, run_as_a_command
 
 
 def _filter_project(sessions: List[Dict], needle: str) -> List[Dict]:
@@ -178,62 +178,6 @@ def _build_parser() -> argparse.ArgumentParser:
 # Main
 # ---------------------------------------------------------------------------
 
-def _as_typed(text):
-    """An argument in the form it was typed, not the form the locale allowed.
-
-    Python decodes ``sys.argv`` with the filesystem encoding, and on a machine
-    with no locale that encoding is ASCII — so ``--project 設定`` arrives as a
-    run of surrogates and matches nothing.  A filter that silently matches
-    nothing is the worst way for this to fail: it reads as a quiet day rather
-    than as an error.  ``os.fsencode`` gives the bytes back untouched, and the
-    shell that sent them was speaking UTF-8.
-    """
-    if text is None or text.isascii():
-        return text                     # the overwhelmingly common case
-    try:
-        return os.fsencode(text).decode("utf-8")
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return text
-
-
-def _write_utf8_if_the_locale_said_nothing() -> None:
-    """Write UTF-8 when the machine claims it can only take ASCII.
-
-    A container with no locale set — a Dockerfile without ``ENV LANG``, cron,
-    most of CI — leaves Python believing stdout is ASCII, and then a single em
-    dash of our own raises ``UnicodeEncodeError`` halfway through the digest:
-    a traceback and half a report, over a character no one chose.
-
-    An ASCII claim is not a claim about the terminal, though.  It is the
-    absence of one, and the terminal on the other end is virtually always
-    UTF-8.  So we write UTF-8 and keep ``surrogateescape``, which hands back
-    unchanged the bytes of any path this machine could not decode — that is
-    what makes a name it cannot spell come out spelled right anyway.
-    """
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            if codecs.lookup(stream.encoding or "").name == "ascii":
-                stream.reconfigure(encoding="utf-8", errors="surrogateescape")
-        except (AttributeError, LookupError, OSError, ValueError):
-            pass                        # not a real stream, or already written to
-
-
-def _stop_writing_down_a_closed_pipe() -> None:
-    """Point stdout at nowhere, so nothing is left to fail on the way out.
-
-    Catching the `BrokenPipeError` is only half of it: whatever is still in the
-    buffer gets flushed again when the interpreter shuts down, too late for any
-    `except` of ours, and that second failure is what prints `Exception ignored
-    in: <_io.TextIOWrapper ...>` and turns the exit code into 120.  Redirecting
-    the file descriptor gives that flush somewhere harmless to go.
-    """
-    try:
-        devnull = os.open(os.devnull, os.O_WRONLY)
-        os.dup2(devnull, sys.stdout.fileno())
-        os.close(devnull)
-    except (AttributeError, OSError, ValueError):
-        pass                            # not a real stream; nothing to protect
-
 
 def main(argv=None) -> int:
     """Entry point, and the one place ctrl-c is allowed to mean something.
@@ -242,35 +186,26 @@ def main(argv=None) -> int:
     change your mind in.  Interrupting a command that is taking longer than you
     expected is ordinary; answering it with a traceback is not, because a
     traceback reads as a crash and sends people looking for a bug they caused
-    on purpose.  130 is the shell's own spelling of "stopped by ctrl-c", and it
-    keeps `agentlog today > digest.md && mail-it` from mailing half a day.
+    on purpose.  Answering an interrupted run with 130 also keeps `agentlog
+    today > digest.md && mail-it` from mailing half a day.
 
     A closed pipe is the same shape of thing.  `agentlog today | head` and
     `| less` quit with `q` are ordinary too, and they leave us writing into a
-    pipe nobody is reading.  141 is 128 + SIGPIPE, the shell's spelling of
-    "the reader hung up", and like 130 it is deliberately not one of the
-    answers a caller is looking for: a digest that got cut off short reported
-    nothing about your day.  The flush lives in a `finally` because argparse
-    prints `--help` and `--version` and then exits, so the write that fails is
-    one nothing inside `_run` would ever see.
+    pipe nobody is reading.  A digest that got cut off short reported nothing
+    about your day, so it must not come back as one of the answers a caller is
+    looking for.
+
+    Both of those are `shell.run_as_a_command`, which is where the mechanism
+    lives and where the codes are named.  What is here is why this tool in
+    particular cannot afford to get them wrong.
     """
-    try:
-        try:
-            return _run(argv)
-        finally:
-            sys.stdout.flush()
-    except KeyboardInterrupt:
-        return 130
-    except BrokenPipeError:
-        _stop_writing_down_a_closed_pipe()
-        return 141
+    return run_as_a_command(_run, argv)
 
 
 def _run(argv=None) -> int:
-    _write_utf8_if_the_locale_said_nothing()
     parser = _build_parser()
     args = parser.parse_args(argv)
-    args.project = _as_typed(args.project)
+    args.project = as_typed(args.project)
 
     home_dir = args.home or os.environ.get("AGENTLOG_HOME") or None
 
