@@ -27,11 +27,8 @@ from typing import List, Optional, Tuple
 from . import __version__
 from .events import KINDS
 from .follow import DEFAULT_STALE_S, Watcher
+from .printer import Printer
 from .shell import as_typed, run_as_a_command
-from .render import (
-    day_rule, format_event, format_json, marks_for, terminal_width, use_color,
-    write_line,
-)
 
 DEFAULT_KINDS = ("cmd", "write", "error", "turn")
 _OFFSET = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
@@ -200,29 +197,18 @@ def _run(argv: Optional[List[str]] = None) -> int:
         project=as_typed(args.project),
     )
 
-    marks = marks_for(sys.stdout)
-    color = use_color(sys.stdout, False if args.no_color else None)
-    width = terminal_width()
+    printer = Printer(sys.stdout,
+                      color=False if args.no_color else None,
+                      as_json=args.json)
     wanted = set(kinds)
-
-    # The day of the last event printed, so the rule below knows when it moved.
-    # A list because `emit` is a closure and this outlives each call to it —
-    # following crosses midnight in the middle of the loop, not between runs.
-    day = [None]
 
     def emit(events) -> int:
         shown = 0
         for event in events:
             if event["kind"] not in wanted:
                 continue
-            if args.json:
-                write_line(format_json(event))
-            else:
-                rule, day[0] = day_rule(event, day[0], width, color)
-                if rule:
-                    write_line(rule)
-                write_line(format_event(event, marks, color, width))
-            shown += 1        # the rule is not an event and is not counted
+            printer.write(event)
+            shown += 1
         return shown
 
     if args.once:
