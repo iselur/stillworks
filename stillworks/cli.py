@@ -14,17 +14,25 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import random
-import runpy
 import sys
 
 from . import __version__, core
 from .shell import run_as_a_command
 
 
+# The three numbers this tool promises, and the only part of its output a
+# script reads.  `1` is the merge gate; the other two exist so that nothing
+# can impersonate it.  See README.md and
+# tests/test_the_exit_codes_the_readme_promises.py, which compares these
+# against the prose.
+OK = 0
+BEHAVIOR_CHANGED = 1
+COULD_NOT_CHECK = 2
+
+
 def _err(msg):
     print("stillworks: {}".format(msg), file=sys.stderr)
-    return 2
+    return COULD_NOT_CHECK
 
 
 def _warn(msg):
@@ -36,143 +44,41 @@ def _warn(msg):
     print("stillworks: warning: {}".format(msg), file=sys.stderr)
 
 
+def _say(note):
+    """One of core's notes, on stderr, where it does not land in `--json`."""
+    print("stillworks: {}".format(note), file=sys.stderr)
+
+
 def cmd_lock(args):
     project = os.path.abspath(args.project)
-    if getattr(args, "timeout", None) is not None and args.timeout <= 0:
-        return _err("--timeout must be greater than zero (got {})".format(args.timeout))
-    if os.path.exists(project) and not os.path.isdir(project):
-        return _err("--project must be a directory, and {} is a file".format(project))
-    records = []
-    module_info = None
-    mod = None
-    skipped = 0
-    # Why the recording run stopped short, or "" if it ran to the end.  It
-    # goes into the lockfile: a lockfile is committed and read for months, and
-    # a warning printed here is gone with the terminal it was printed in.
-    partial = ""
-
-    if not args.target and not args.cmd:
-        return _err("nothing to lock — give a TARGET module/file, or --cmd")
-    if args.run and not args.target:
-        return _err("--run needs a TARGET module or file to record calls into, "
-                    "e.g.: stillworks lock src/mod.py --run scripts/daily.py")
-    if args.fuzz and not args.target:
-        return _err("--fuzz needs a TARGET module or file, "
-                    "e.g.: stillworks lock src/mod.py --fuzz 8")
-
-    if args.target:
-        try:
-            mod, module_info = core.load_module(args.target, project)
-        except Exception as exc:
-            return _err("could not load {}: {}".format(args.target, exc))
-
-    if args.run and mod is not None:
-        script = os.path.abspath(args.run)
-        if not os.path.exists(script):
-            return _err("no such script: {}".format(script))
-        with core.Recorder(mod) as rec:
-            old_argv = sys.argv
-            sys.argv = [script] + (args.script_args or [])
-            try:
-                runpy.run_path(script, run_name="__main__")
-            except SystemExit as exc:
-                # A nonzero exit is how a script says it failed — an argparse
-                # error, a `sys.exit(main())`, a test runner.  Swallowing it
-                # made a driver that died after one of its ten calls print
-                # exactly what one that ran to the end prints, on exit 0.
-                if exc.code not in (0, None):
-                    partial = "the recording run did not finish: the script " \
-                              "exited {}".format(exc.code)
-            except Exception as exc:
-                partial = "the recording run did not finish: the script " \
-                          "raised {}: {}".format(type(exc).__name__, exc)
-            finally:
-                sys.argv = old_argv
-        records.extend(rec.records)
-        skipped += rec.skipped_unpicklable
-        if partial:
-            print("stillworks: {}\n"
-                  "  (the {} call(s) recorded before that are kept — whatever "
-                  "the script would\n   have exercised afterwards is not in "
-                  "this baseline)".format(partial, len(rec.records)),
-                  file=sys.stderr)
-
-    if args.fuzz and mod is not None:
-        rng = random.Random(args.seed)
-        per_fn = max(1, args.fuzz)
-        fuzz_empty = []
-        for name, fn in core.public_functions(mod):
-            recs, sk = core.fuzz_function(name, fn, rng, per_fn)
-            if not recs:
-                fuzz_empty.append(name)
-            records.extend(recs)
-            skipped += sk
-        if fuzz_empty:
-            print("stillworks: could not generate inputs for: {}\n"
-                  "  (--fuzz needs positional parameters annotated with "
-                  "int/float/str/bool/list/dict\n   and no required "
-                  "keyword-only parameters — capture these with --run or --cmd)"
-                  .format(", ".join(fuzz_empty)), file=sys.stderr)
-
-    timeout = getattr(args, "timeout", None) or core.DEFAULT_CMD_TIMEOUT
-    for c in (args.cmd or []):
-        out = core.run_cmd(c, cwd=project, timeout=timeout)
-        records.append({"kind": "cmd", "cmd": c, "out": out, "source": "cmd"})
-
-    if not records:
-        hint = ""
-        if args.target and not args.run and not args.fuzz:
-            hint = " (try --fuzz 8, or --run your_script.py; fuzzing needs " \
-                   "type annotations on function parameters)"
-        return _err("no behavior captured{}".format(hint))
-
-    if args.max and len(records) > args.max:
-        records = records[:args.max]
-
-    core.assign_ids(records)
-    # Determinism guard: replay each record once; flag flaky ones.
-    core.mark_nondeterministic(records, mod, project)
-
-    # `lock` is the way out of a damaged lockfile, so it must not be blocked by
-    # one.  It only reads the old file to say what it is about to replace.
-    try:
-        existing = core.load_lock(project)
-    except core.LockfileError as exc:
-        existing = None
-        print("stillworks: replacing a lockfile that could not be read\n"
-              "  {}".format(exc), file=sys.stderr)
-    if existing is not None:
-        n_hist = len(existing.get("history") or [])
-        print("stillworks: replacing existing lockfile ({} records{})\n"
-              "  (to capture several modes in one baseline, combine them in a "
-              "single lock command)".format(
-                  len(existing.get("records") or []),
-                  ", {} accepted changes".format(n_hist) if n_hist else ""),
-              file=sys.stderr)
-
-    lock = core.new_lock(module_info, args.seed)
-    lock["records"] = records
-    lock["partial"] = partial
-    try:
-        core.save_lock(project, lock)
-    except OSError as exc:
-        return _err("could not write the lockfile into {}\n"
-                    "  {}\n"
-                    "  stillworks needs to create a {} directory in the project "
-                    "it locks.".format(
-                        os.path.join(project, core.LOCK_DIR), exc, core.LOCK_DIR))
-
-    n_calls = sum(1 for r in records if r["kind"] == "call")
-    n_cmds = sum(1 for r in records if r["kind"] == "cmd")
-    n_nondet = sum(1 for r in records if r.get("nondet"))
+    result = core.lock(
+        project,
+        target=args.target,
+        run=args.run,
+        script_args=args.script_args,
+        fuzz=args.fuzz,
+        seed=args.seed,
+        cmds=args.cmd,
+        timeout=getattr(args, "timeout", None),
+        max_records=args.max,
+    )
+    # Said before the verdict either way: these are things that happened during
+    # the run, and a note printed after "locked 12 records" reads as a caveat
+    # about the lockfile rather than as part of making it.
+    for note in result.get("notes", ()):
+        _say(note)
+    if "error" in result:
+        return _err(result["error"])
     print("locked {} records ({} calls, {} commands) -> {}".format(
-        len(records), n_calls, n_cmds,
-        os.path.relpath(core.lock_path(project))))
-    if n_nondet:
-        print("  {} nondeterministic (flagged, excluded from check)".format(n_nondet))
-    if skipped:
-        print("  {} calls skipped (arguments not picklable)".format(skipped))
-    return 0
+        result["records"], result["calls"], result["cmds"],
+        os.path.relpath(result["path"])))
+    if result["nondet"]:
+        print("  {} nondeterministic (flagged, excluded from check)".format(
+            result["nondet"]))
+    if result["skipped"]:
+        print("  {} calls skipped (arguments not picklable)".format(
+            result["skipped"]))
+    return OK
 
 
 def cmd_check(args):
@@ -185,6 +91,10 @@ def cmd_check(args):
         # Say so, and let the records below decide the exit code.
         _warn(result["not_saved"] +
               " — `accept` and `report` will not see this run")
+    # Asked once, here, rather than three times below: the verdict printed, the
+    # advice printed under it and the code handed back are one answer to one
+    # question, and a fourth reader of `verified` is how they come apart.
+    nothing_verified = result["verified"] == 0
     if args.json:
         print(json.dumps(result, indent=1, default=str))
     else:
@@ -215,14 +125,14 @@ def cmd_check(args):
                 print("         {}".format(_one_row(e["note"])))
         total = sum(counts.values())
         summary = ", ".join("{} {}".format(v, k) for k, v in sorted(counts.items()))
-        if result["verified"] == 0:
+        if nothing_verified:
             verdict = "NOTHING VERIFIED"
         elif result["ok"]:
             verdict = "STILL WORKS"
         else:
             verdict = "BEHAVIOR CHANGED"
         print("{}: {} records — {}".format(verdict, total, summary))
-        if result["verified"] == 0:
+        if nothing_verified:
             # The one line that said this would happen was printed by `lock`,
             # days ago, and scrolled past.  Say it here, where the answer is
             # being read, and say what to do about it.
@@ -240,12 +150,12 @@ def cmd_check(args):
             print("         Whatever it would have exercised afterwards is "
                   "not covered here.")
             print("         Re-lock once the script runs to the end.")
-    if result["verified"] == 0:
+    if nothing_verified:
         # Not 1: behavior did not change, because nothing looked.  2 is this
         # tool's word for "this did not work", and is what `lock` returns when
         # it declines to write a lockfile with nothing in it.
-        return 2
-    return 0 if result["ok"] else 1
+        return COULD_NOT_CHECK
+    return OK if result["ok"] else BEHAVIOR_CHANGED
 
 
 def _print_cmd_diff(e):
@@ -316,15 +226,7 @@ def cmd_accept(args):
     if not args.ids and not args.all:
         return _err("say which records to accept: `stillworks accept ID ...` "
                     "or `stillworks accept --all`")
-    # Unlike `check`, this command exists only to write the lockfile.  If that
-    # write does not land nothing was accepted, so saying "accepted new
-    # behavior" and exiting 0 would be a straight lie — the next `check` would
-    # still fail and the baseline on disk would still be the old one.
-    try:
-        result = core.accept(project, ids=None if args.all else args.ids)
-    except OSError as exc:
-        return _err("could not update the baseline in {}: {}".format(
-            os.path.join(project, core.LOCK_DIR), exc))
+    result = core.accept(project, ids=None if args.all else args.ids)
     if "error" in result:
         return _err(result["error"])
     for rid in result["accepted"]:
@@ -333,7 +235,7 @@ def cmd_accept(args):
         print("removed (function gone): {}".format(rid))
     if not result["accepted"] and not result["removed"]:
         print("nothing to accept — baseline already matches current behavior")
-    return 0
+    return OK
 
 
 def cmd_report(args):
@@ -357,28 +259,28 @@ def cmd_report(args):
         print("wrote {}".format(args.output))
     else:
         print(text)
-    return 0
+    return OK
 
 
 def cmd_status(args):
-    project = os.path.abspath(args.project)
-    lock = core.load_lock(project)
-    if lock is None:
-        print("no lockfile in {}".format(os.path.join(project, core.LOCK_DIR)))
+    result = core.status(os.path.abspath(args.project))
+    if "none" in result:
+        print("no lockfile in {}".format(result["none"]))
         print("start with: stillworks lock <module-or-file> --fuzz 8")
-        return 0
-    records = lock["records"]
-    n_nondet = sum(1 for r in records if r.get("nondet"))
-    print("lockfile: {} records, created {}".format(len(records), lock["created"]))
-    if lock.get("module"):
-        print("module:   {}".format(lock["module"].get("path") or lock["module"].get("module")))
-    if n_nondet:
-        print("flagged:  {} nondeterministic".format(n_nondet))
-    if lock.get("history"):
-        print("history:  {} accepted changes".format(len(lock["history"])))
-    if lock.get("partial"):
-        print("partial:  {}".format(_one_row(lock["partial"])))
-    return 0
+        return OK
+    print("lockfile: {} records, created {}".format(
+        result["records"], result["created"]))
+    # Same rule as `check`: every value here was read back out of a file an
+    # agent in the repo is free to rewrite, so every value goes through a row.
+    for label, value in (("module", result["module"]),
+                         ("flagged", "{} nondeterministic".format(result["nondet"])
+                                     if result["nondet"] else ""),
+                         ("history", "{} accepted changes".format(result["history"])
+                                     if result["history"] else ""),
+                         ("partial", result["partial"])):
+        if value:
+            print("{:9s} {}".format(label + ":", _one_row(value)))
+    return OK
 
 
 def cmd_mcp(args):
@@ -485,12 +387,12 @@ def _run(argv=None):
     args = parser.parse_args(argv)
     if not getattr(args, "command", None):
         parser.print_help()
-        return 0
+        return OK
 
     problem = _whats_wrong_with_the_project_dir(args)
     if problem:
         print("stillworks: {}".format(problem), file=sys.stderr)
-        return 2
+        return COULD_NOT_CHECK
 
     try:
         return args.func(args)
@@ -502,7 +404,7 @@ def _run(argv=None):
               "  a lockfile is a recording — re-record it with "
               "`stillworks lock`, or fix the file by hand."
               .format(exc), file=sys.stderr)
-        return 2
+        return COULD_NOT_CHECK
 
 
 # The commands that actually operate on a project directory — the ones built

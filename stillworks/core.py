@@ -691,6 +691,192 @@ def mark_nondeterministic(records, mod, project_dir=None):
 
 
 # ---------------------------------------------------------------------------
+# Lock: run the code and write down what it did.
+# ---------------------------------------------------------------------------
+
+def lock(project_dir, target=None, run=None, script_args=None, fuzz=0,
+         seed=None, cmds=(), timeout=None, max_records=None):
+    """Record current behavior into a lockfile.  Returns a result dict.
+
+    The same shape `check` hands back, for the same reason: a caller renders
+    it, and never has to know how any of it was found out.  Three things it
+    reports that used to be printed from inside the run --
+
+      * `error`   -- nothing was recorded and nothing was written;
+      * `notes`   -- something worth saying that is not the answer, in the
+                     order it happened;
+      * `partial` -- the recording run stopped short, which also goes into the
+                     lockfile because a lockfile outlives its terminal.
+
+    Nothing here is printed and nothing here is a flag name this module chose:
+    the wording is the tool's, the streams are the caller's.
+    """
+    notes = []
+    records = []
+    module_info = None
+    mod = None
+    skipped = 0
+    partial = ""
+
+    if timeout is not None and timeout <= 0:
+        return {"error": "--timeout must be greater than zero (got {})"
+                         .format(timeout)}
+    if os.path.exists(project_dir) and not os.path.isdir(project_dir):
+        return {"error": "--project must be a directory, and {} is a file"
+                         .format(project_dir)}
+    if not target and not cmds:
+        return {"error": "nothing to lock — give a TARGET module/file, or --cmd"}
+    if run and not target:
+        return {"error": "--run needs a TARGET module or file to record calls "
+                         "into, e.g.: stillworks lock src/mod.py --run "
+                         "scripts/daily.py"}
+    if fuzz and not target:
+        return {"error": "--fuzz needs a TARGET module or file, "
+                         "e.g.: stillworks lock src/mod.py --fuzz 8"}
+
+    if target:
+        try:
+            mod, module_info = load_module(target, project_dir)
+        except Exception as exc:
+            return {"error": "could not load {}: {}".format(target, exc)}
+
+    if run and mod is not None:
+        script = os.path.abspath(run)
+        if not os.path.exists(script):
+            return {"error": "no such script: {}".format(script)}
+        with Recorder(mod) as rec:
+            old_argv = sys.argv
+            sys.argv = [script] + list(script_args or [])
+            try:
+                runpy.run_path(script, run_name="__main__")
+            except SystemExit as exc:
+                # A nonzero exit is how a script says it failed — an argparse
+                # error, a `sys.exit(main())`, a test runner.  Swallowing it
+                # made a driver that died after one of its ten calls print
+                # exactly what one that ran to the end prints, on exit 0.
+                if exc.code not in (0, None):
+                    partial = "the recording run did not finish: the script " \
+                              "exited {}".format(exc.code)
+            except Exception as exc:
+                partial = "the recording run did not finish: the script " \
+                          "raised {}: {}".format(type(exc).__name__, exc)
+            finally:
+                sys.argv = old_argv
+        records.extend(rec.records)
+        skipped += rec.skipped_unpicklable
+        if partial:
+            notes.append(
+                "{}\n"
+                "  (the {} call(s) recorded before that are kept — whatever "
+                "the script would\n   have exercised afterwards is not in "
+                "this baseline)".format(partial, len(rec.records)))
+
+    if fuzz and mod is not None:
+        rng = random.Random(seed)
+        per_fn = max(1, fuzz)
+        fuzz_empty = []
+        for name, fn in public_functions(mod):
+            recs, sk = fuzz_function(name, fn, rng, per_fn)
+            if not recs:
+                fuzz_empty.append(name)
+            records.extend(recs)
+            skipped += sk
+        if fuzz_empty:
+            notes.append(
+                "could not generate inputs for: {}\n"
+                "  (--fuzz needs positional parameters annotated with "
+                "int/float/str/bool/list/dict\n   and no required "
+                "keyword-only parameters — capture these with --run or --cmd)"
+                .format(", ".join(fuzz_empty)))
+
+    for c in (cmds or []):
+        out = run_cmd(c, cwd=project_dir,
+                      timeout=timeout or DEFAULT_CMD_TIMEOUT)
+        records.append({"kind": "cmd", "cmd": c, "out": out, "source": "cmd"})
+
+    if not records:
+        hint = ""
+        if target and not run and not fuzz:
+            hint = " (try --fuzz 8, or --run your_script.py; fuzzing needs " \
+                   "type annotations on function parameters)"
+        return {"error": "no behavior captured{}".format(hint)}
+
+    if max_records and len(records) > max_records:
+        records = records[:max_records]
+
+    assign_ids(records)
+    # Determinism guard: replay each record once; flag flaky ones.
+    mark_nondeterministic(records, mod, project_dir)
+
+    # `lock` is the way out of a damaged lockfile, so it must not be blocked by
+    # one.  It only reads the old file to say what it is about to replace.
+    try:
+        existing = load_lock(project_dir)
+    except LockfileError as exc:
+        existing = None
+        notes.append("replacing a lockfile that could not be read\n"
+                     "  {}".format(exc))
+    if existing is not None:
+        n_hist = len(existing.get("history") or [])
+        notes.append(
+            "replacing existing lockfile ({} records{})\n"
+            "  (to capture several modes in one baseline, combine them in a "
+            "single lock command)".format(
+                len(existing.get("records") or []),
+                ", {} accepted changes".format(n_hist) if n_hist else ""))
+
+    new = new_lock(module_info, seed)
+    new["records"] = records
+    new["partial"] = partial
+    try:
+        save_lock(project_dir, new)
+    except OSError as exc:
+        return {"error": "could not write the lockfile into {}\n"
+                         "  {}\n"
+                         "  stillworks needs to create a {} directory in the "
+                         "project it locks.".format(
+                             os.path.join(project_dir, LOCK_DIR), exc, LOCK_DIR),
+                "notes": notes}
+
+    return {
+        "path": lock_path(project_dir),
+        "records": len(records),
+        "calls": sum(1 for r in records if r["kind"] == "call"),
+        "cmds": sum(1 for r in records if r["kind"] == "cmd"),
+        "nondet": sum(1 for r in records if r.get("nondet")),
+        "skipped": skipped,
+        "partial": partial,
+        "notes": notes,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Status: what the lockfile on disk says about itself.
+# ---------------------------------------------------------------------------
+
+def status(project_dir):
+    """What is on disk, counted.  Returns a result dict.
+
+    `none` is not an error: a project with no lockfile is the ordinary state of
+    a project nobody has locked yet, and the answer to "what is here" is
+    "nothing yet", on exit 0.
+    """
+    lock_file = load_lock(project_dir)
+    if lock_file is None:
+        return {"none": os.path.join(project_dir, LOCK_DIR)}
+    records = lock_file["records"]
+    module = lock_file.get("module") or {}
+    return {
+        "records": len(records),
+        "created": lock_file["created"],
+        "module": module.get("path") or module.get("module") or "",
+        "nondet": sum(1 for r in records if r.get("nondet")),
+        "history": len(lock_file.get("history") or []),
+        "partial": lock_file.get("partial") or "",
+    }
+
+
+# ---------------------------------------------------------------------------
 # Check: replay everything against current code.
 # ---------------------------------------------------------------------------
 
@@ -865,5 +1051,15 @@ def accept(project_dir, ids=None):
             accepted.append(rec["id"])
         new_records.append(rec)
     lock["records"] = new_records
-    save_lock(project_dir, lock)
+    # This command exists only to write the lockfile.  If the write does not
+    # land nothing was accepted, so a caller that said "accepted new behavior"
+    # on the strength of the list above would be telling a straight lie: the
+    # next `check` still fails and the baseline on disk is still the old one.
+    # Handed back rather than raised, so it arrives the same way every other
+    # refusal in this module does.
+    try:
+        save_lock(project_dir, lock)
+    except OSError as exc:
+        return {"error": "could not update the baseline in {}: {}".format(
+            os.path.join(project_dir, LOCK_DIR), exc)}
     return {"accepted": accepted, "removed": removed}

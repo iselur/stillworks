@@ -101,6 +101,25 @@ def documented_codes(text):
     return {int(code) for code in _DOCUMENTED.findall(passage)}
 
 
+def _module_level_numbers(tree):
+    """`NAME = <int>` at the top of a module, as a dict.
+
+    Both files below name their codes, so both need a way to turn `return OK`
+    back into the number a script will read.  Nothing else in either module
+    assigns a bare integer at module level, and anything that starts to is
+    harmless here: it is only ever looked up by a name something returned.
+    """
+    named = {}
+    for node in tree.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, int)
+                and not isinstance(node.value.value, bool)):
+            named[node.targets[0].id] = node.value.value
+    return named
+
+
 def shell_codes():
     """The codes `shell.py` chooses on its own -- the two it gives names to.
 
@@ -112,14 +131,7 @@ def shell_codes():
     """
     with open(SHELL_SOURCE, encoding="utf-8") as handle:
         tree = ast.parse(handle.read())
-    named = {}
-    for node in tree.body:
-        if (isinstance(node, ast.Assign) and len(node.targets) == 1
-                and isinstance(node.targets[0], ast.Name)
-                and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, int)
-                and not isinstance(node.value.value, bool)):
-            named[node.targets[0].id] = node.value.value
+    named = _module_level_numbers(tree)
     returned = {node.value.id for node in ast.walk(tree)
                 if isinstance(node, ast.Return)
                 and isinstance(node.value, ast.Name)}
@@ -127,9 +139,18 @@ def shell_codes():
 
 
 def source_codes():
-    """Every constant exit code cli.py produces."""
+    """Every constant exit code cli.py produces.
+
+    Constant, not literal: cli.py names its three, because a `2` sitting on
+    its own in a branch says nothing about which of the promised answers it
+    is.  A name that is not one of those is not an exit code and is skipped --
+    which is also the failure this would have if the names were read loosely,
+    so they are resolved against the module's own assignments rather than
+    guessed at.
+    """
     with open(CLI_SOURCE, encoding="utf-8") as handle:
         tree = ast.parse(handle.read())
+    named = _module_level_numbers(tree)
     codes = set()
     for node in ast.walk(tree):
         if isinstance(node, ast.Return):
@@ -139,10 +160,10 @@ def source_codes():
             values = [node.args[0]] if node.args else []
         else:
             continue
-        # `return 0 if result["ok"] else 1` is the whole verdict, and it is
-        # the only place 1 is written.  Reading returns as single constants
-        # walks straight past it, which would leave the tool's own headline
-        # answer out of the set being compared with the README.
+        # `return OK if result["ok"] else BEHAVIOR_CHANGED` is the whole
+        # verdict, and it is the only place 1 is written.  Reading returns as
+        # single values walks straight past it, which would leave the tool's
+        # own headline answer out of the set being compared with the README.
         for value in list(values):
             if isinstance(value, ast.IfExp):
                 values += [value.body, value.orelse]
@@ -151,6 +172,8 @@ def source_codes():
                     and isinstance(value.value, int)
                     and not isinstance(value.value, bool)):
                 codes.add(value.value)
+            elif isinstance(value, ast.Name) and value.id in named:
+                codes.add(named[value.id])
     return codes | shell_codes()
 
 
