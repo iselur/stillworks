@@ -11,15 +11,11 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from . import __version__
+from .clock import duration, how_long, when
 from .render import (
-    _fmt_datetime,
-    _fmt_duration,
-    _fmt_time,
     _fmt_tokens,
     _dedup_merge,
-    _idled,
     _shorten_cmd,
-    _window_duration,
     group_by_project,
     unique_short_ids,
     summary_line,
@@ -273,16 +269,8 @@ def _render_card(s: Dict, shorts: Optional[Dict[str, str]] = None) -> str:
     card_header = _tag("div", " ".join(header_parts), class_="card-header")
 
     # Meta row
-    when = _fmt_datetime(s["start"]) if s["start"] else "?"
-    if s["end"] and s["end"] != s["start"]:
-        when += " – " + _fmt_time(s["end"])
-    dur = _fmt_duration(_window_duration(s))
-    if s.get("window_s") is not None:
-        dur += f" in window, {_fmt_duration(s['duration_s'])} total"
-    elif _idled(s):
-        dur += f" active, {_fmt_duration(s['duration_s'])} open"
     meta_items = [
-        _tag("span", f"⏱ {_e(when)}  ({_e(dur)})"),
+        _tag("span", f"⏱ {_e(when(s))}  ({_e(how_long(s))})"),
         _tag("span", f"{_e(str(s['user_turns']))} turn{'s' if s['user_turns'] != 1 else ''}"),
     ]
     if s["models"]:
@@ -345,7 +333,7 @@ def _render_project(group: Dict, shorts: Optional[Dict[str, str]] = None) -> str
 
     header_parts = [
         _tag("span", _e(group["name"]), class_="project-name"),
-        _tag("span", _e(_fmt_duration(group["seconds"])), class_="project-stats"),
+        _tag("span", _e(duration(group["seconds"])), class_="project-stats"),
         _tag("span", _e(" · ".join(stats)), class_="project-stats"),
     ]
     if group["path"] and group["path"] != group["name"]:

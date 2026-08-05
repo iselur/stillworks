@@ -7,6 +7,8 @@ import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from . import clock
+from .clock import how_long, when
 from .parser import active_spans
 from .terminal import block as safe_for_terminal
 from .terminal import display_width, pad as _pad
@@ -38,33 +40,6 @@ def _clip(text: str, width: int) -> str:
         out.append(char)
         used += cells
     return "".join(out)
-
-
-def _fmt_duration(seconds: Optional[float]) -> str:
-    if seconds is None or seconds < 0:
-        return "?"
-    s = int(seconds)
-    if s < 60:
-        return f"{s}s"
-    m, s = divmod(s, 60)
-    if m < 60:
-        return f"{m}m {s:02d}s"
-    h, m = divmod(m, 60)
-    return f"{h}h {m:02d}m"
-
-
-def _fmt_time(dt: Optional[datetime]) -> str:
-    if dt is None:
-        return "?"
-    local = dt.astimezone()
-    return local.strftime("%H:%M")
-
-
-def _fmt_datetime(dt: Optional[datetime]) -> str:
-    if dt is None:
-        return "?"
-    local = dt.astimezone()
-    return local.strftime("%Y-%m-%d %H:%M")
 
 
 def _truncate(items: List[str], limit: int = 6, width: int = 60) -> List[str]:
@@ -165,39 +140,6 @@ def unique_short_ids(sessions: List[Dict], minimum: int = 8) -> Dict[str, str]:
     return {i: i[:width] for i in ids}
 
 
-def _window_duration(s: Dict) -> Optional[float]:
-    """Seconds to report for a session: the time it spent working.
-
-    Not the time it was open.  A session sitting idle from lunch until evening
-    was not working through the afternoon, and counting from its first event to
-    its last said it was.  ``duration_s`` still answers "how long was this open",
-    which is a real and different question, and the session block prints both.
-    """
-    spans = s.get("active_spans")
-    if spans is None:
-        # `list` and `show` ask for no window, so nothing has worked the spans
-        # out for them.  The column is headed DUR in both places and it should
-        # mean the same thing there as in the digest.
-        spans = active_spans(s)
-    if spans:
-        return sum((b - a).total_seconds() for a, b in spans)
-    if s.get("window_s") is not None:
-        return s["window_s"]
-    return s["duration_s"]
-
-
-def _idled(s: Dict) -> bool:
-    """Whether this session was open appreciably longer than it was busy.
-
-    A minute of slack, so that a session which merely rounds oddly does not
-    sprout a second number saying the same thing twice.
-    """
-    active = _window_duration(s)
-    whole = s.get("duration_s")
-    return (active is not None and whole is not None
-            and active + 60 < whole)
-
-
 def active_seconds(sessions: List[Dict]) -> float:
     """Wall-clock time during which at least one session was working.
 
@@ -249,7 +191,7 @@ def summary_line(sessions: List[Dict]) -> str:
 
     parts = [
         f"{len(sessions)} session{'s' if len(sessions) != 1 else ''}",
-        _fmt_duration(total_s),
+        clock.duration(total_s),
     ]
     if projects:
         parts.append(f"{projects} project{'s' if projects != 1 else ''}")
@@ -278,7 +220,7 @@ def compaction_note(sessions: List[Dict]) -> str:
     if not compactions:
         return ""
     in_sessions = sum(1 for s in sessions if s.get("compactions"))
-    spent = _fmt_duration(sum(c.get("duration_s", 0.0) for c in compactions))
+    spent = clock.duration(sum(c.get("duration_s", 0.0) for c in compactions))
     dropped = sum(c.get("dropped", 0) for c in compactions)
     return (f"compacted {len(compactions)}x in {in_sessions} "
             f"session{'s' if in_sessions != 1 else ''}"
@@ -402,7 +344,7 @@ def render_digest(
         return f"nothing recorded {_period_phrase(period_label)}"
 
     groups = group_by_project(sessions)
-    total = _fmt_duration(active_seconds(sessions))
+    total = clock.duration(active_seconds(sessions))
     n_proj = len(groups)
     lines = [
         f"{total} active across {n_proj} project{'s' if n_proj != 1 else ''}"
@@ -412,7 +354,7 @@ def render_digest(
 
     shown = groups[:max_projects]
     name_w = min(max(max(display_width(g["name"]) for g in shown), 10), 24)
-    dur_w = max(len(_fmt_duration(g["seconds"])) for g in shown)
+    dur_w = max(len(clock.duration(g["seconds"])) for g in shown)
 
     for g in shown:
         stats = []
@@ -426,7 +368,7 @@ def render_digest(
             stats.append("no edits or commands recorded")
         lines.append(
             f"  {_pad(_clip(g['name'], name_w), name_w)}  "
-            f"{_fmt_duration(g['seconds']).rjust(dur_w)}   " + " · ".join(stats)
+            f"{clock.duration(g['seconds']).rjust(dur_w)}   " + " · ".join(stats)
         )
 
         if g["top_files"]:
@@ -508,22 +450,8 @@ def _render_session_text(
     source_tag = f"[{s['source']}]" if s.get("source") else ""
 
     # Header line
-    time_range = ""
-    if s["start"]:
-        time_range = _fmt_datetime(s["start"])
-        if s["end"] and s["end"] != s["start"]:
-            # A bare HH:MM end reads as running backwards when the session
-            # spans midnight, so show the full date once it does.
-            same_day = s["end"].astimezone().date() == s["start"].astimezone().date()
-            time_range += " – " + (_fmt_time(s["end"]) if same_day else _fmt_datetime(s["end"]))
-    duration = _fmt_duration(_window_duration(s))
-    if s.get("window_s") is not None:
-        duration += f" in window, {_fmt_duration(s['duration_s'])} total"
-    elif _idled(s):
-        # It was open longer than it was busy, and the time range printed beside
-        # this says so — without the second number the two look like they
-        # disagree.
-        duration += f" active, {_fmt_duration(s['duration_s'])} open"
+    time_range = when(s)
+    duration = how_long(s)
 
     title = s.get("ai_title")
     header = f"  {short_id}  {project}  {source_tag}"
@@ -586,7 +514,7 @@ def _fmt_compactions(s: Dict) -> str:
     if not compactions:
         return ""
     manual = sum(1 for c in compactions if c.get("trigger") == "manual")
-    spent = _fmt_duration(sum(c.get("duration_s", 0.0) for c in compactions))
+    spent = clock.duration(sum(c.get("duration_s", 0.0) for c in compactions))
     dropped = sum(c.get("dropped", 0) for c in compactions)
     how_many = f"compacted {len(compactions)}x"
     if manual:
@@ -619,10 +547,13 @@ def render_list(sessions: List[Dict]) -> str:
     for s in sessions:
         sid = shorts.get(s["id"]) or "?"
         project = _clip(s["project_name"] or "?", 24)
-        when = _fmt_datetime(s["start"]) if s["start"] else "?"
-        dur = _fmt_duration(_window_duration(s))
+        # Started, not ran-from-to: the WHEN column is sixteen characters and a
+        # range does not go in one.  And DUR is eight, so this is the one view
+        # that takes the bare number without the phrase that explains it.
+        started = clock.at(s["start"]) if s["start"] else "?"
+        dur = how_long(s, qualified=False)
         src = s.get("source", "?")[:6]
-        rows.append((sid, project, when, dur, src))
+        rows.append((sid, project, started, dur, src))
 
     # Column widths — the ID column grows with the prefix length needed here
     id_w = max([8] + [display_width(r[0]) for r in rows])
@@ -650,9 +581,13 @@ def render_show(s: Dict) -> str:
     lines.append(f"session  {_one_row(str(s['id']))}")
     lines.append(f"source   {_one_row(str(s.get('source', '?')))}")
     lines.append(f"project  {_one_row(str(s['project'] or '?'))}")
-    lines.append(f"start    {_fmt_datetime(s['start'])}")
-    lines.append(f"end      {_fmt_datetime(s['end'])}")
-    lines.append(f"duration {_fmt_duration(s['duration_s'])}")
+    lines.append(f"start    {clock.at(s['start'])}")
+    lines.append(f"end      {clock.at(s['end'])}")
+    # The time it spent working, and -- when they differ -- the time it was
+    # open.  This row used to be the open time alone, under the bare label
+    # "duration", which made the most detailed view the only one disagreeing
+    # with every other view about the same session.
+    lines.append(f"duration {how_long(s)}")
     if s["models"]:
         lines.append(f"models   {_one_row(', '.join(s['models']))}")
     if s.get("version"):
@@ -717,7 +652,7 @@ def render_markdown(sessions: List[Dict]) -> str:
     # Group by project, as the terminal and HTML views do: the reader wants
     # "what did it work on" before "which session ran when".
     for group in group_by_project(sessions):
-        stats = [f"{_fmt_duration(group['seconds'])} active"]
+        stats = [f"{clock.duration(group['seconds'])} active"]
         if group["files"]:
             stats.append(f"{group['files']} file{'s' if group['files'] != 1 else ''}")
         if group["commands"]:
@@ -742,9 +677,7 @@ def _markdown_session(s: Dict, shorts: Dict[str, str]) -> List[str]:
     lines.append(f"### `{short_id}`")
     lines.append("")
 
-    when = _fmt_datetime(s["start"]) if s["start"] else "?"
-    dur = _fmt_duration(_window_duration(s))
-    lines.append(f"- **when**: {when}  ({dur})")
+    lines.append(f"- **when**: {when(s)}  ({how_long(s)})")
     lines.append(f"- **source**: {s.get('source', '?')}")
     if s["models"]:
         lines.append(f"- **model**: {', '.join(s['models'])}")
@@ -799,7 +732,7 @@ def _session_for_json(s: Dict) -> Dict:
     # `duration_s` is how long the session was open, and on its own it invites
     # exactly the mistake the text output stopped making.  Say the working time
     # too, under its own name, so a script does not have to add up the spans.
-    out["active_s"] = _window_duration(s)
+    out["active_s"] = clock.working_seconds(s)
     # A named pair rather than a bare tuple: a script reading the one field
     # here that is meant for a person should not have to know which end of a
     # list the sentence is on.
