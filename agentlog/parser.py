@@ -42,29 +42,20 @@ import stat
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from .transcript import (
+    is_work_call,
+    is_write_tool,
+    parse_time,
+    patched_files,
+    script_commands,
+    script_failed,
+    tool_path,
+)
+
 
 # ---------------------------------------------------------------------------
 # Shared helpers
 # ---------------------------------------------------------------------------
-
-def _ts(raw) -> Optional[datetime]:
-    """Parse an ISO 8601 string to an *aware* datetime.  None on failure.
-
-    Always aware, never naive.  A log that dropped its ``Z`` would otherwise
-    hand back a naive datetime, and the first comparison against an aware one
-    raises TypeError halfway through the digest.  Assuming UTC is the honest
-    reading: it is the offset the format is written in.
-    """
-    if not isinstance(raw, str) or not raw:
-        return None
-    try:
-        parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=timezone.utc)
-    return parsed
-
 
 def _text(value) -> str:
     """A field that ought to be a string, as a string.  Anything else is empty.
@@ -290,22 +281,6 @@ def _read_lines(path: str) -> tuple[List[str], int]:
 # Claude Code parser
 # ---------------------------------------------------------------------------
 
-# The tools that write a file, each with the field it puts the path under.
-# `NotebookEdit` is the reason this is a mapping and not a set: it does not use
-# `file_path` like the other three, so knowing its name is not enough to find
-# what it wrote.  A day spent in a notebook read `0 files written`.
-# tests/test_notebook_writes.py.
-_CLAUDE_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path",
-                       "MultiEdit": "file_path",
-                       "NotebookEdit": "notebook_path"}
-
-
-# The recap ends with a note about the settings screen — the same words on all
-# 327 of them here.  It is addressed to whoever was watching at the time, not
-# to somebody reading the log back a week later, and repeating it under every
-# session is how a useful line turns into wallpaper.  Matched by what it points
-# at rather than by its exact wording, and only at the very end, so a recap
-# that happens to discuss `/config` in passing keeps its sentence.
 _RECAP_TRAILER = re.compile(r"\s*\([^()]*/config[^()]*\)\s*$")
 
 
@@ -388,7 +363,7 @@ def parse_claude_session(
             continue
 
         record_type = obj.get("type", "")
-        ts = _ts(obj.get("timestamp", ""))
+        ts = parse_time(obj.get("timestamp", ""))
 
         uuid = _text(obj.get("uuid"))
         if uuid and uuid in seen_uuids:
@@ -491,12 +466,12 @@ def parse_claude_session(
                     continue
                 if tool_id:
                     seen_tool_ids.add(tool_id)
-                fp = _text(inp.get(_CLAUDE_WRITE_TOOLS.get(name, "file_path")))
+                fp = tool_path(name, inp)
                 if name == "Read" and fp:
                     files_read.append(fp)
                     s["events"].append((ts, "read", fp))
                     tool_labels[tool_id] = f"read {os.path.basename(fp)}"
-                elif name in _CLAUDE_WRITE_TOOLS and fp:
+                elif is_write_tool(name) and fp:
                     files_written.append(fp)
                     s["write_counts"][fp] = s["write_counts"].get(fp, 0) + 1
                     s["events"].append((ts, "write", fp))
@@ -563,104 +538,6 @@ def _decode_claude_path(jsonl_path: str) -> str:
 
 # Calls that represent work done on the machine.  Everything else Codex emits
 # (update_plan, spawn_agent, wait, send_message) is coordination, not activity.
-_CODEX_WORK_CALLS = {"exec_command", "apply_patch"}
-
-# A patch marker can sit at the start of its own line, or halfway through a
-# line of JavaScript — see _patched_files.
-_PATCH_LINE = re.compile(r"\*\*\* (?:Update|Add|Delete) File:[ \t]*([^\n]+)")
-
-# Current Codex builds do not send arguments at all.  A `custom_tool_call`
-# carries a snippet of JavaScript — `tools.exec_command({cmd:"pytest -x",
-# workdir:"..."})`, often several of them inside a Promise.all — so the command
-# has to be read back out of the source.  The keys are unquoted there, which is
-# why this is a scan and not json.loads.
-#
-# Reading only the older `function_call` shape made 65.6% of the recorded work
-# on a real machine invisible, and 74% of Codex sessions show as having done
-# nothing at all.  A snippet that stops matching this reports nothing, which is
-# the state agentlog was already in; nothing here assumes it is well formed.
-_JS_COMMAND = re.compile(
-    r'["\']?\b(?:cmd|command)\b["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
-
-# Said in the first line of the output and nowhere else in the record.
-_SCRIPT_FAILED = "script failed"
-
-
-def _js_unescape(text: str) -> str:
-    """Best-effort: a JavaScript string literal's contents, read as text.
-
-    The whole snippet is not valid JSON, so it cannot simply be parsed.  Only
-    the two escapes that matter for finding a patch envelope are undone; being
-    wrong about the rest costs nothing, because all that is read back out of
-    the result is the file paths.
-    """
-    if "\\" not in text:
-        return text
-    return text.replace("\\n", "\n").replace('\\"', '"')
-
-
-def _unquote(raw: str) -> str:
-    """A JSON string body, decoded — or returned as it stands if it will not."""
-    try:
-        value = json.loads('"' + raw + '"')
-    except (json.JSONDecodeError, ValueError):
-        return raw
-    return value if isinstance(value, str) else raw
-
-
-def _script_commands(raw) -> List[str]:
-    """Every command in a script call, in the order they appear.
-
-    Every one, not the first: a Promise.all of four calls is four commands,
-    and the old shape's one-command-per-record habit is what made taking the
-    first look sufficient.
-    """
-    if not isinstance(raw, str) or not raw:
-        return []
-    out: List[str] = []
-    for found in _JS_COMMAND.findall(raw):
-        cmd = _unquote(found).strip()
-        if cmd:
-            out.append(cmd)
-    return out
-
-
-def _script_failed(output) -> bool:
-    """Did a script call come back as a failure?"""
-    if isinstance(output, str):
-        text = output
-    elif isinstance(output, list):
-        parts = [item.get("text", "") for item in output
-                 if isinstance(item, dict) and isinstance(item.get("text"), str)]
-        text = "\n".join(parts)
-    else:
-        return False
-    return text.strip()[:40].lower().startswith(_SCRIPT_FAILED)
-
-
-def _patched_files(text: str) -> List[str]:
-    """File paths named in an ``apply_patch`` envelope.
-
-    Codex has no structured file-write field — it edits by handing an envelope
-    like ``*** Update File: src/app.py`` to a patch tool — so the only record of
-    which file changed is the text of the call itself.
-
-    The marker is not required to start its line: in a current session the
-    envelope is embedded in a line of JavaScript, and insisting on a line start
-    there finds nothing at all.
-    """
-    if not text or "*** " not in text:
-        return []
-    out: List[str] = []
-    for found in _PATCH_LINE.findall(_js_unescape(text)):
-        # Whatever follows the path is the rest of somebody's source line.
-        path = found.strip().rstrip("\\").strip().strip("'\"")
-        path = path.rstrip(" \t\\'\");,")
-        if path:
-            out.append(path)
-    return out
-
-
 def parse_codex_session(path: str) -> Optional[Dict]:
     """Parse one Codex JSONL file.  Returns a session dict or None."""
     # Filename pattern: rollout-DATE-SESSION_ID.jsonl
@@ -703,7 +580,7 @@ def parse_codex_session(path: str) -> Optional[Dict]:
             continue
 
         record_type = obj.get("type", "")
-        ts = _ts(obj.get("timestamp", ""))
+        ts = parse_time(obj.get("timestamp", ""))
         if ts:
             if s["start"] is None or ts < s["start"]:
                 s["start"] = ts
@@ -812,9 +689,9 @@ def parse_codex_session(path: str) -> Optional[Dict]:
         elif record_type == "response_item":
             pt = _text(payload.get("type"))
             if pt == "custom_tool_call":
-                # How current Codex runs everything.  See _script_commands.
+                # How current Codex runs everything.  See transcript.script_commands.
                 raw_input = payload.get("input")
-                found = _script_commands(raw_input)
+                found = script_commands(raw_input)
                 call_id = _text(payload.get("call_id"))
                 for cmd in found:
                     commands.append(cmd)
@@ -823,7 +700,7 @@ def parse_codex_session(path: str) -> Optional[Dict]:
                 # command.  The files are remembered rather than recorded:
                 # patch_apply_end says whether the patch actually landed, and
                 # if this session sends those records it is the one to believe.
-                patched = (_patched_files(raw_input)
+                patched = (patched_files(raw_input)
                            if isinstance(raw_input, str) else [])
                 if patched:
                     envelope_writes.append((ts, patched))
@@ -840,12 +717,12 @@ def parse_codex_session(path: str) -> Optional[Dict]:
                         call_cmds[call_id] = "patch " + ", ".join(
                             os.path.basename(p) for p in patched[:3])
             elif pt == "custom_tool_call_output":
-                if _script_failed(payload.get("output")):
+                if script_failed(payload.get("output")):
                     s["errors"] += 1
                     label = call_cmds.get(_text(payload.get("call_id")), "")
                     s["failed_cmds"].append(label)
                     s["events"].append((ts, "error", label))
-            elif pt == "function_call" and payload.get("name") in _CODEX_WORK_CALLS:
+            elif pt == "function_call" and is_work_call(payload.get("name")):
                 args_str = payload.get("arguments")
                 if not isinstance(args_str, str):
                     args_str = "{}"
@@ -876,7 +753,7 @@ def parse_codex_session(path: str) -> Optional[Dict]:
                 # often as absolutely; without this the same file shows up
                 # twice under two spellings.
                 root = _text(args.get("workdir")) or s["project"] or ""
-                for path in _patched_files(patch or cmd):
+                for path in patched_files(patch or cmd):
                     if not os.path.isabs(path) and isinstance(root, str) and root:
                         path = os.path.normpath(os.path.join(root, path))
                     files_written.append(path)

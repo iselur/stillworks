@@ -26,112 +26,23 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
+from .transcript import (
+    is_work_call,
+    is_write_tool,
+    parse_time,
+    patched_files,
+    script_commands,
+    script_failed,
+    script_workdir,
+    tool_path,
+)
+
 # Reads are excluded from the default view: an agent reads far more than it
 # writes, and a stream that is 90% reads is a stream nobody watches.
 KINDS = ("turn", "cmd", "write", "read", "error")
 
-# The tools that write a file, each with the field it puts the path under.
-# `NotebookEdit` is why this is a mapping and not a set: it uses
-# `notebook_path`, so its name alone would not have found what it wrote.  An
-# agent working through a notebook showed a blank screen, which is the one
-# thing this tool is built not to do.  tests/test_notebook_writes.py.
-_CLAUDE_WRITE_TOOLS = {"Write": "file_path", "Edit": "file_path",
-                       "MultiEdit": "file_path",
-                       "NotebookEdit": "notebook_path"}
-_CODEX_WORK_CALLS = {"exec_command", "apply_patch"}
-
-# A patch marker can sit at the start of its own line, or halfway through a
-# line of JavaScript — see _patched_files.
-_PATCH_LINE = re.compile(r"\*\*\* (?:Update|Add|Delete) File:[ \t]*([^\n]+)")
-
-# Current Codex runs the shell by sending a snippet of JavaScript, so the
-# command is a string literal inside somebody else's source code rather than a
-# field of the record.  Reading it back out is the only way to see it at all.
-#
-#   const r = await tools.exec_command({"cmd":"pytest -x","workdir":"/p"});
-#
-# The word boundary matters: `exec_command` also ends in `command`, and without
-# it the function name matches its own argument.
-_JS_COMMAND = re.compile(r'["\']?\b(?:cmd|command)\b["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
-
-# The directory the same snippet says to run in, which is what a relative path
-# in a patch envelope is relative to.
-_JS_WORKDIR = re.compile(r'["\']?\bworkdir\b["\']?\s*:\s*"((?:[^"\\]|\\.)*)"')
-
-_SCRIPT_FAILED = "script failed"
-
 # How close together two reports of the same file have to be to be one write.
 _WRITE_ECHO = timedelta(seconds=30)
-
-
-def parse_time(raw: str) -> Optional[datetime]:
-    """ISO 8601 to an aware datetime, or None if it is not one.
-
-    Aware for every input, which this used to only promise.  Every real record
-    ends in ``Z``, but the file is written by another program, and one that
-    dropped its offset came back naive — and then `Watcher.poll` compared it
-    against an aware ``--since`` and raised, taking the watcher down with a
-    traceback and an exit 1 the README says cannot happen.
-
-    A naive stamp is read as UTC, which is the offset the format is written in
-    and the same reading agentlog takes.  The alternative, letting Python
-    resolve it as local, put the same log line nine hours from where agentlog
-    put it when read in Tokyo: two tools in one family disagreeing about one
-    line, quietly, and differently on each machine.  Assuming UTC can still be
-    wrong, but it is wrong by the same amount everywhere.
-    """
-    if not raw:
-        return None
-    try:
-        at = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except (ValueError, AttributeError, TypeError):
-        return None
-    return at if at.tzinfo is not None else at.replace(tzinfo=timezone.utc)
-
-
-def _js_unescape(text: str) -> str:
-    """Best-effort: a JavaScript string literal's contents, read as text.
-
-    The whole snippet is not valid JSON, so it cannot simply be parsed.  Only
-    the two escapes that matter for finding a patch envelope are undone; being
-    wrong about the rest costs nothing, because all that is read back out of
-    the result is the file paths.
-    """
-    if "\\" not in text:
-        return text
-    return text.replace("\\n", "\n").replace('\\"', '"')
-
-
-def _unquote(raw: str) -> str:
-    """A JSON string body, decoded — or returned as it stands if it will not."""
-    try:
-        value = json.loads('"' + raw + '"')
-    except (json.JSONDecodeError, ValueError):
-        return raw
-    return value if isinstance(value, str) else raw
-
-
-def _patched_files(text: str) -> List[str]:
-    """File paths named in an ``apply_patch`` envelope.
-
-    Codex has no structured file-write field — it edits by handing an envelope
-    like ``*** Update File: src/app.py`` to a patch tool — so the only record of
-    which file changed is the text of the call itself.
-
-    The marker is not required to start its line: in a current session the
-    envelope is embedded in a line of JavaScript, and insisting on a line start
-    there finds nothing at all.
-    """
-    if not text or "*** " not in text:
-        return []
-    out: List[str] = []
-    for found in _PATCH_LINE.findall(_js_unescape(text)):
-        # Whatever follows the path is the rest of somebody's source line.
-        path = found.strip().rstrip("\\").strip().strip("'\"")
-        path = path.rstrip(" \t\\'\");,")
-        if path:
-            out.append(path)
-    return out
 
 
 class Tracker:
@@ -365,16 +276,16 @@ def _claude_events(obj: Dict, tr: Tracker) -> List[Dict]:
             inp = item.get("input")
             if not isinstance(inp, dict):
                 inp = {}
-            path = inp.get(_CLAUDE_WRITE_TOOLS.get(name, "file_path"), "")
+            path = tool_path(name, inp)
             if name == "Bash":
                 cmd = inp.get("command", "")
                 if isinstance(cmd, str) and cmd:
                     tr.remember(call_id, cmd)
                     out.append(tr._event(at, "cmd", cmd))
-            elif name in _CLAUDE_WRITE_TOOLS and isinstance(path, str) and path:
+            elif is_write_tool(name) and path:
                 tr.remember(call_id, "edit " + os.path.basename(path))
                 out.append(tr._event(at, "write", path))
-            elif name == "Read" and isinstance(path, str) and path:
+            elif name == "Read" and path:
                 tr.remember(call_id, "read " + os.path.basename(path))
                 out.append(tr._event(at, "read", path))
             elif name:
@@ -423,7 +334,7 @@ def _codex_events(obj: Dict, tr: Tracker) -> List[Dict]:
     elif kind == "response_item":
         if ptype == "custom_tool_call":
             out.extend(_codex_script(payload, tr, at))
-        elif ptype == "function_call" and payload.get("name") in _CODEX_WORK_CALLS:
+        elif ptype == "function_call" and is_work_call(payload.get("name")):
             out.extend(_codex_call(payload, tr, at))
         elif ptype == "custom_tool_call_output":
             # A patch that failed to apply has already been reported, in more
@@ -440,7 +351,7 @@ def _codex_events(obj: Dict, tr: Tracker) -> List[Dict]:
             # anything at all — one real session showed `0 errors` against six
             # failed patch attempts.
             call_id = payload.get("call_id") or ""
-            if _script_failed(payload.get("output")) \
+            if script_failed(payload.get("output")) \
                     and not tr.patch_failed(call_id):
                 out.append(tr._event(at, "error",
                                      tr.recall(call_id) or "script failed"))
@@ -490,19 +401,13 @@ def _codex_script(payload: Dict, tr: Tracker, at) -> List[Dict]:
     tr.running(call_id)
     out: List[Dict] = []
 
-    for found in _JS_COMMAND.findall(raw):
-        cmd = _unquote(found).strip()
-        if not cmd:
-            continue
+    for cmd in script_commands(raw):
         # The first command in a snippet is the one the failure is named after:
         # by the time the result arrives, several may have run.
         if not tr.recall(call_id):
             tr.remember(call_id, cmd)
         out.append(tr._event(at, "cmd", cmd))
 
-    # Codex does not always announce a cwd, but every exec snippet carries a
-    # workdir.  Without reading it, the project column stays empty for a whole
-    # session that was never in doubt.
     # A snippet that only sends a patch has no command in it to be named after,
     # and the failure that may follow carries nothing but the call id.  The
     # envelope names the files it was trying to change, so remember that much:
@@ -510,14 +415,16 @@ def _codex_script(payload: Dict, tr: Tracker, at) -> List[Dict]:
     # failed" is not.  This remembers a label and nothing else — no write is
     # reported from the envelope, for the reason set out below.
     if not tr.recall(call_id):
-        touched = _patched_files(raw)
+        touched = patched_files(raw)
         if touched:
             tr.remember(call_id, "patch " + ", ".join(
                 os.path.basename(p) for p in touched[:3]))
 
-    workdir = _JS_WORKDIR.search(raw)
-    if workdir and not tr.project:
-        found = _unquote(workdir.group(1)).strip()
+    # Codex does not always announce a cwd, but every exec snippet carries a
+    # workdir.  Without reading it, the project column stays empty for a whole
+    # session that was never in doubt.
+    if not tr.project:
+        found = script_workdir(raw)
         if found:
             tr.project = found
 
@@ -557,7 +464,7 @@ def _codex_call(payload: Dict, tr: Tracker, at) -> List[Dict]:
         tr.remember(call_id, cmd)
         out.append(tr._event(at, "cmd", cmd))
     root = args.get("workdir") or tr.project or ""
-    out.extend(_codex_writes(_patched_files(patch or cmd), root, tr, at,
+    out.extend(_codex_writes(patched_files(patch or cmd), root, tr, at,
                              sent=True))
     return out
 
@@ -594,20 +501,3 @@ def _codex_mcp_result(payload: Dict, tr: Tracker, at) -> List[Dict]:
     # which server was down, and that is the part a person can act on.
     what = "/".join(p for p in (server, tool) if p)
     return [tr._event(at, "error", "mcp " + what if what else "mcp call failed")]
-
-
-def _script_failed(output) -> bool:
-    """Did a script call come back as a failure?
-
-    Codex says so in the first line of the output — ``Script failed`` against
-    ``Script completed`` — and nowhere else in the record.
-    """
-    if isinstance(output, str):
-        text = output
-    elif isinstance(output, list):
-        parts = [item.get("text", "") for item in output
-                 if isinstance(item, dict) and isinstance(item.get("text"), str)]
-        text = "\n".join(parts)
-    else:
-        return False
-    return text.strip()[:40].lower().startswith(_SCRIPT_FAILED)
