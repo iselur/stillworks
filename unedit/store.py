@@ -5,6 +5,13 @@ Layout under .unedit/ (relative to the project root):
   objects/<xx>/<rest>       content-addressed file blobs, SHA-256, stored once
   snapshots/<id>.json       manifest per snapshot (human-readable JSON)
   aside/<timestamp>/        new files moved here during restore
+
+A function here takes either a `root` — the project directory a person named —
+or a `store`, the path that layout lives at.  The ones taking a root are the
+interface; the ones taking a store are the layer underneath, called by this file
+and by its own tests and by nothing else.  Where `.unedit` sits inside a root is
+this file's business, and a caller that works it out has to be told when it
+moves.
 """
 
 from __future__ import annotations
@@ -28,7 +35,7 @@ from typing import Dict, Iterator, List, Optional, Tuple
 # the four tools that print.  Only the save-time use is here -- what a listing
 # does with a value is the command layer's decision, and it asks `terminal`
 # itself.
-from .terminal import one_line
+from .terminal import one_line, quoted
 
 
 # ---------------------------------------------------------------------------
@@ -51,13 +58,22 @@ FILE_LIMIT = 50_000
 
 STORE_DIR_NAME = '.unedit'
 
+# The two files a person writes patterns into.  One tuple, because a second
+# list of these somewhere else is a list that will name the wrong one.
+IGNORE_FILES = ('.gitignore', '.uneditignore')
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _fmt_size(n: int) -> str:
-    """Human-readable file size."""
+def fmt_size(n: int) -> str:
+    """A byte count the way a person reads one.
+
+    Public because it is part of the interface whether it is spelled that way
+    or not: every listing, every diff line, and `where` print a size, and each
+    of them printing its own would be four roundings of the same number.
+    """
     if n < 1024:
         return '{} B'.format(n)
     elif n < 1024 ** 2:
@@ -145,10 +161,29 @@ def check_safe_root(root: str) -> Optional[str]:
 # Ignore / exclusion logic
 # ---------------------------------------------------------------------------
 
+class IgnorePattern(str):
+    """One line out of an ignore file, which remembers which file it came from.
+
+    A `str` subclass and not a pair, because a pattern is a string everywhere
+    it is used and the only thing anybody ever wants next to it is the name of
+    the file to go and edit.  Naming that file is the whole difference between
+    "your snapshot is empty" and "your snapshot is empty because of line 3 of
+    this": a report that names an ignore file merely because it exists sends
+    the person to the wrong one whenever both are there.
+    """
+
+    source: str
+
+    def __new__(cls, text: str, source: str) -> 'IgnorePattern':
+        pattern = super().__new__(cls, text)
+        pattern.source = source
+        return pattern
+
+
 def load_ignore_patterns(root: str) -> List[str]:
     """Load patterns from .gitignore and .uneditignore in root."""
     patterns: List[str] = []
-    for fname in ('.gitignore', '.uneditignore'):
+    for fname in IGNORE_FILES:
         fpath = os.path.join(root, fname)
         if os.path.isfile(fpath):
             try:
@@ -159,7 +194,7 @@ def load_ignore_patterns(root: str) -> List[str]:
                         # Strip trailing slash (marks directory, but we treat same)
                         stripped = line.rstrip('/')
                         if stripped and not stripped.startswith('#'):
-                            patterns.append(stripped)
+                            patterns.append(IgnorePattern(stripped, fname))
             except OSError:
                 pass
     return patterns
@@ -182,8 +217,34 @@ def _matches_pattern(rel_path: str, pattern: str) -> bool:
         return fnmatch.fnmatch(name, pattern)
 
 
+BY_DEFAULT = "excluded by unedit's default exclusions"
+
+
+def what_excludes(name: str, rel_path: str, default_excludes: frozenset,
+                  patterns: List[str]) -> Optional[str]:
+    """Why this path is left out, in words, or None if it is not left out.
+
+    The reason names the line that did it and the file to find it in, because
+    that is the only form of this sentence a person can act on.  The pattern is
+    printed the way `terminal` prints anything that came off disk: it is a line
+    out of a file in the tree being snapshotted, which is a file whatever is
+    being audited can rewrite.
+    """
+    if name in default_excludes:
+        return BY_DEFAULT
+    for pat in patterns:
+        if _matches_pattern(rel_path, pat):
+            return 'excluded by {} in {}'.format(
+                quoted(pat), getattr(pat, 'source', 'an ignore file'))
+    return None
+
+
 def is_excluded(name: str, rel_path: str, default_excludes: frozenset, patterns: List[str]) -> bool:
-    """True if this file/dir should be skipped."""
+    """True if this file/dir should be skipped.
+
+    The fast half of `what_excludes`: this one runs per file, so it answers yes
+    or no without building the sentence explaining it.
+    """
     if name in default_excludes:
         return True
     for pat in patterns:
@@ -201,6 +262,7 @@ def scan_tree(
     default_excludes: frozenset = DEFAULT_EXCLUDES,
     patterns: Optional[List[str]] = None,
     skipped: Optional[List[Tuple[str, str]]] = None,
+    example_excluded: Optional[List[Tuple[str, str]]] = None,
 ) -> Iterator[Tuple[str, os.stat_result, bool, Optional[str]]]:
     """
     Walk root, yielding (rel_path, stat_result, is_symlink, symlink_target).
@@ -215,6 +277,19 @@ def scan_tree(
     Anything skipped is appended to ``skipped`` as (rel_path, reason) so the
     caller can say so.  A snapshot that quietly contains less than the project
     is worse than one that refuses: it is discovered at restore time.
+
+    ``example_excluded`` is the same fact about the other kind of leaving-out:
+    the paths this walk passed over on purpose.  It holds one (rel_path,
+    reason) pair and not all of them, because a tree whose whole point is that
+    it is ignored would otherwise cost a list as long as ``node_modules`` to
+    build an example nobody reads.  Which one it keeps is the one worth showing
+    a person: never this tool's own directory, never the ignore file doing the
+    excluding — holding up the cause as the loss reads as circular — and a file
+    ahead of a directory, because a directory is a name and a file is a thing
+    you would miss.  The caller needs it only when the walk yielded nothing at
+    all, and by then the walk is over: it is kept as it goes rather than looked
+    up afterwards, because a second walk answering the same question is a
+    second set of rules that can disagree with the first.
     """
     if patterns is None:
         patterns = load_ignore_patterns(root)
@@ -222,6 +297,23 @@ def scan_tree(
     def note(path: str, reason: str) -> None:
         if skipped is not None:
             skipped.append((path, reason))
+
+    # Lower sorts better.  Nothing is in the mailbox yet, so anything beats it.
+    best = [(True, True)]
+
+    def note_excluded(rel_path: str, name: str, is_dir: bool) -> None:
+        if example_excluded is None or name == STORE_DIR_NAME:
+            return
+        rank = (name in IGNORE_FILES, is_dir)
+        if example_excluded and rank >= best[0]:
+            return
+        # Only now, because this builds a sentence and the caller asking for an
+        # example is not asking for one per ignored file in the tree.
+        reason = what_excludes(name, rel_path, default_excludes, patterns)
+        if reason is None:
+            return
+        example_excluded[:] = [(rel_path, reason)]
+        best[0] = rank
 
     def on_error(exc: OSError) -> None:
         # os.walk swallows these by default, and a directory that could not be
@@ -244,7 +336,9 @@ def scan_tree(
         pruned = []
         for d in dirnames:
             rel_d = '{}/{}'.format(rel_dir, d) if rel_dir else d
-            if not is_excluded(d, rel_d, default_excludes, patterns):
+            if is_excluded(d, rel_d, default_excludes, patterns):
+                note_excluded(rel_d, d, True)
+            else:
                 pruned.append(d)
         dirnames[:] = pruned
 
@@ -255,6 +349,7 @@ def scan_tree(
 
             # Check exclusion for the file itself
             if is_excluded(fname, rel_path, default_excludes, patterns):
+                note_excluded(rel_path, fname, False)
                 continue
 
             try:
@@ -354,8 +449,10 @@ def save(root: str, message: str = '', force: bool = False) -> Dict:
     total_files = 0
     entries = []
     skipped: List[Tuple[str, str]] = []
+    left_out: List[Tuple[str, str]] = []
     for rel_path, st, is_lnk, lnk_target in scan_tree(root, DEFAULT_EXCLUDES, patterns,
-                                                      skipped=skipped):
+                                                      skipped=skipped,
+                                                      example_excluded=left_out):
         total_files += 1
         if not is_lnk:
             total_size += st.st_size
@@ -424,6 +521,19 @@ def save(root: str, message: str = '', force: bool = False) -> Dict:
         # time, which is months after the sentence scrolled off the screen.
         manifest['skipped'] = [{'path': p, 'reason': r} for p, r in skipped]
 
+    # A snapshot with nothing in it is either an honest baseline of an empty
+    # directory or a safety net with no floor, and only the walk can tell them
+    # apart: it is the difference between finding nothing and leaving
+    # everything out.  Recorded here for the same reason `skipped` is — the
+    # snapshot has to be able to say later what it does not contain — and named
+    # here rather than worked out by whoever prints it, because the rules that
+    # decided it are these rules and a second reading of the tree is a second
+    # set of them.
+    example = left_out or skipped[:1]
+    if not files and example:
+        manifest['nothing_captured'] = {'path': example[0][0],
+                                        'reason': example[0][1]}
+
     snap_file = _snap_path(store, snap_id)
     # A manifest is the thing that has to be readable later, and "later" is
     # often a different machine with a different locale.  Naming the encoding
@@ -447,7 +557,15 @@ def load_manifest(store: str, snap_id: str) -> Dict:
         return json.load(f)
 
 
-def scan_snapshots(store: str) -> Tuple[List[Dict], List[Dict]]:
+def scan_snapshots(root: str) -> Tuple[List[Dict], List[Dict]]:
+    """The snapshots under ``root`` that can be read, and the ones that cannot.
+
+    See ``_scan_store`` for what the two lists hold.
+    """
+    return _scan_store(_store_dir(root))
+
+
+def _scan_store(store: str) -> Tuple[List[Dict], List[Dict]]:
     """The snapshots that can be read, and the ones that cannot.
 
     Good manifests come back oldest-first.  Damaged ones come back as
@@ -527,11 +645,16 @@ def list_snapshots(store: str) -> List[Dict]:
     unreadable snapshot missing from a list reads as a snapshot that was never
     taken.
     """
-    return scan_snapshots(store)[0]
+    return _scan_store(store)[0]
 
 
-def describe_damage(damaged: List[Dict], store: str) -> str:
-    """What to print about manifests that could not be read."""
+def describe_damage(damaged: List[Dict], root: str) -> str:
+    """What to print about manifests that could not be read.
+
+    It names the two directories, so the caller does not have to know where
+    either of them is to say where to go and look.
+    """
+    store = _store_dir(root)
     head = '{} damaged snapshot{} in {}:'.format(
         len(damaged), '' if len(damaged) == 1 else 's', _snapshots_dir(store))
     lines = [head]
@@ -542,12 +665,12 @@ def describe_damage(damaged: List[Dict], store: str) -> str:
     return '\n'.join(lines)
 
 
-def resolve_snap_id(store: str, snap_id: Optional[str]) -> str:
+def resolve_snap_id(root: str, snap_id: Optional[str]) -> str:
     """Resolve a snapshot ID (or None → newest). Raises RuntimeError if not found."""
-    snaps, damaged = scan_snapshots(store)
+    snaps, damaged = scan_snapshots(root)
     if not snaps:
         if damaged:
-            raise RuntimeError(describe_damage(damaged, store))
+            raise RuntimeError(describe_damage(damaged, root))
         raise RuntimeError('no snapshots found')
     if snap_id is None:
         # "The newest" has to mean the newest, including when the newest is the
@@ -559,7 +682,7 @@ def resolve_snap_id(store: str, snap_id: Optional[str]) -> str:
         if newer:
             raise RuntimeError(
                 '{}\nthe newest snapshot is one of these — name an older id to '
-                'restore it instead'.format(describe_damage(newer, store)))
+                'restore it instead'.format(describe_damage(newer, root)))
         return snaps[-1]['id']
     if not snap_id.strip():
         # An empty prefix matches every snapshot.  With one in the store that
@@ -570,7 +693,7 @@ def resolve_snap_id(store: str, snap_id: Optional[str]) -> str:
     if not matches:
         hit = [d for d in damaged if d['id'].startswith(snap_id)]
         if hit:
-            raise RuntimeError(describe_damage(hit, store))
+            raise RuntimeError(describe_damage(hit, root))
         raise RuntimeError('no snapshot matching {!r}'.format(snap_id))
     if len(matches) > 1:
         raise RuntimeError('ambiguous id {!r} matches: {}'.format(snap_id, ', '.join(matches)))
@@ -705,7 +828,7 @@ def restore(
         raise RuntimeError(err)
 
     store = _store_dir(root)
-    resolved_id = resolve_snap_id(store, snap_id)
+    resolved_id = resolve_snap_id(root, snap_id)
     manifest = load_manifest(store, resolved_id)
     _refuse_to_write_outside(root, manifest)
     objects = _objects_dir(store)
@@ -913,10 +1036,10 @@ def restore(
 # Show
 # ---------------------------------------------------------------------------
 
-def show_snapshot(store: str, snap_id: Optional[str]) -> Tuple[Dict, List[Dict]]:
+def show_snapshot(root: str, snap_id: Optional[str]) -> Tuple[Dict, List[Dict]]:
     """Return (manifest_header, file_list) for a snapshot."""
-    resolved_id = resolve_snap_id(store, snap_id)
-    manifest = load_manifest(store, resolved_id)
+    resolved_id = resolve_snap_id(root, snap_id)
+    manifest = load_manifest(_store_dir(root), resolved_id)
     return manifest, manifest.get('files', [])
 
 
@@ -934,7 +1057,7 @@ def diff_snapshot(root: str, snap_id: Optional[str], patch: bool = False) -> Dic
         raise RuntimeError(err)
 
     store = _store_dir(root)
-    resolved_id = resolve_snap_id(store, snap_id)
+    resolved_id = resolve_snap_id(root, snap_id)
     manifest = load_manifest(store, resolved_id)
     objects = _objects_dir(store)
 
@@ -1040,8 +1163,9 @@ def diff_snapshot(root: str, snap_id: Optional[str], patch: bool = False) -> Dic
 # Drop
 # ---------------------------------------------------------------------------
 
-def drop_snapshots(store: str, snap_ids: List[str], all_snaps: bool = False) -> Dict:
+def drop_snapshots(root: str, snap_ids: List[str], all_snaps: bool = False) -> Dict:
     """Delete snapshots and GC orphaned objects."""
+    store = _store_dir(root)
     snaps = list_snapshots(store)
     if not snaps:
         raise RuntimeError('no snapshots to drop')
@@ -1058,7 +1182,7 @@ def drop_snapshots(store: str, snap_ids: List[str], all_snaps: bool = False) -> 
     else:
         to_drop = set()
         for sid in snap_ids:
-            resolved = resolve_snap_id(store, sid)
+            resolved = resolve_snap_id(root, sid)
             to_drop.add(resolved)
 
     # Delete snapshot files
@@ -1132,5 +1256,5 @@ def where_info(root: str) -> Dict:
         'store_dir': store,
         'snap_count': snap_count,
         'total_bytes': total_bytes,
-        'total_size': _fmt_size(total_bytes),
+        'total_size': fmt_size(total_bytes),
     }

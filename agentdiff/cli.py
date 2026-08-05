@@ -19,6 +19,10 @@ from . import __version__
 from .git import find_repo_root, get_changes, GitError
 from .rules import RULE_DOCS, SEVERITY, gating_findings, run_rules
 from .shell import run_as_a_command
+# What a scope file may hold, and where it is -- one file format read and
+# written in one place, because the reader and the writer disagreeing about it
+# is a scope that saves cleanly and reviews as no scope at all.
+from . import scope as _scope
 # What a terminal obeys rather than shows is a fact about terminals rather than
 # about a review: it lives in `terminal.py`, which is the same file in the four
 # tools that print.  A review names files the reader has to go and find, so it
@@ -30,10 +34,6 @@ from .terminal import quoted
 # ---------------------------------------------------------------------------
 # Config helpers
 # ---------------------------------------------------------------------------
-
-def _agentdiff_dir(repo_root):
-    return os.path.join(repo_root, ".agentdiff")
-
 
 def _resolve_repo_root(args):
     """Find the repository, starting from ``--project`` if one was named.
@@ -54,31 +54,6 @@ def _resolve_repo_root(args):
     if not os.path.isdir(start):
         raise GitError("no such directory: {}".format(start))
     return find_repo_root(start)
-
-
-def _load_file_lines(path):
-    """Read a config file and return non-blank, non-comment lines.
-
-    A config file that cannot be read is not a reason to refuse to review.  It
-    is somebody's own directory: the file may be unreadable, a directory, or
-    not text at all, and none of that says anything about the diff.
-    """
-    if not os.path.isfile(path):
-        return []
-    try:
-        with open(path, encoding="utf-8", errors="replace") as f:
-            lines = f.read().splitlines()
-    except OSError:
-        return []
-    return [line.strip() for line in lines if line.strip() and not line.startswith("#")]
-
-
-def _load_scope(repo_root):
-    return _load_file_lines(os.path.join(_agentdiff_dir(repo_root), "scope"))
-
-
-def _load_ignore(repo_root):
-    return _load_file_lines(os.path.join(_agentdiff_dir(repo_root), "ignore"))
 
 
 # ---------------------------------------------------------------------------
@@ -314,8 +289,8 @@ def cmd_review(args):
         return 2
 
     since_ref = args.since or "HEAD"
-    scope_globs = list(args.scope) if args.scope else _load_scope(repo_root)
-    ignore_patterns = _load_ignore(repo_root)
+    scope_globs = list(args.scope) if args.scope else _scope.read(repo_root)
+    ignore_patterns = _scope.read_ignore(repo_root)
 
     try:
         changes = get_changes(
@@ -357,30 +332,27 @@ def cmd_scope(args):
         print(f"error: {e}", file=sys.stderr)
         return 2
 
-    for g in args.globs:
-        # The scope file is one glob per line, so a glob containing a newline
-        # would be stored as two — and the second one is usually "**", which
-        # quietly widens the scope every later review is checked against.
-        if not g.strip():
-            print("error: an empty scope glob matches nothing — give a pattern",
-                  file=sys.stderr)
-            return 2
-        if "\n" in g or "\r" in g:
-            print(f"error: a scope glob cannot contain a newline: {g!r}", file=sys.stderr)
-            return 2
-
-    d = _agentdiff_dir(repo_root)
-    scope_path = os.path.join(d, "scope")
     try:
-        os.makedirs(d, exist_ok=True)
-        with open(scope_path, "w") as f:
-            for g in args.globs:
-                f.write(g + "\n")
-    except OSError as e:
-        print(f"error: could not save scope to {scope_path}: {e}", file=sys.stderr)
+        stored = _scope.write(repo_root, args.globs)
+    except _scope.ScopeError as e:
+        # Which globs may be stored is the format's business, and the format
+        # says why.  This command's job is the exit code and the `error:`.
+        print(f"error: {e}", file=sys.stderr)
         return 2
-    print(f"scope saved: {', '.join(args.globs)}")
-    print(f"  stored in {scope_path}")
+    except OSError as e:
+        print(f"error: could not save scope to {_scope.path(repo_root)}: {e}",
+              file=sys.stderr)
+        return 2
+    # What is printed is what went into the file, not what was typed.  Today
+    # those are the same bytes even where the two are different strings -- on a
+    # machine with no locale the argument arrives as surrogates, and `shell`
+    # has already set stdout to write surrogates back out as the bytes they
+    # came from, so `args.globs` here would look identical.  It is still the
+    # wrong source: the sentence says what was saved, so it has to come from
+    # the save.  The day `write` normalises something the terminal can see, a
+    # confirmation that quotes the argument back is one that cannot notice.
+    print(f"scope saved: {', '.join(stored)}")
+    print(f"  stored in {_scope.path(repo_root)}")
     return 0
 
 

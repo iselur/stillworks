@@ -61,48 +61,6 @@ def _print_json(obj) -> None:
     print(json.dumps(obj, indent=2))
 
 
-def _an_uncaptured_file(root: str) -> str:
-    """One file the snapshot did not take, or '' if the tree really is empty.
-
-    Only asked when a snapshot came back holding nothing.  An empty snapshot
-    is legitimate on its own — a directory with nothing in it is a real
-    baseline, and `back` to it means "clear this out again".  The dangerous
-    case prints identically and is not the same thing: the directory is full,
-    an ignore rule matched all of it, and the snapshot is empty anyway.  The
-    person then believes they have something to go back to and does not.
-
-    Walking the tree a second time costs nothing here: this runs only when the
-    first walk captured zero files, and it stops at the first file it finds.
-    Ignored directories are walked too — a project whose only contents are
-    excluded is exactly the case being detected.
-    """
-    store = _store.STORE_DIR_NAME
-    fallback = ''
-    for dirpath, dirnames, filenames in os.walk(root):
-        at_root = os.path.abspath(dirpath) == os.path.abspath(root)
-        if at_root:
-            dirnames[:] = [d for d in dirnames if d != store]
-        for name in sorted(filenames):
-            rel = os.path.relpath(os.path.join(dirpath, name), root)
-            # The ignore file is the least useful thing to hold up as the file
-            # you lost — it is the cause, and naming it reads as circular.  Any
-            # other file makes the point better, so keep looking for one.
-            if at_root and name in ('.gitignore', '.uneditignore'):
-                fallback = fallback or rel
-                continue
-            return rel
-    return fallback
-
-
-def _why_nothing_was_captured(root: str) -> str:
-    """Name the ignore file that is doing it, if there is one to name."""
-    named = [f for f in ('.uneditignore', '.gitignore')
-             if os.path.isfile(os.path.join(root, f))]
-    if not named:
-        return 'excluded by unedit\'s default exclusions'
-    return 'excluded by {}'.format(' or '.join(named))
-
-
 # ---------------------------------------------------------------------------
 # Commands
 # ---------------------------------------------------------------------------
@@ -118,8 +76,7 @@ def cmd_save(args) -> int:
 
     snap_id = manifest['id']
     fc = manifest['file_count']
-    sz = _store._fmt_size(manifest['total_size'])
-    store_dir = _store._store_dir(root)
+    sz = _store.fmt_size(manifest['total_size'])
 
     skipped = manifest.get('skipped') or []
 
@@ -128,7 +85,10 @@ def cmd_save(args) -> int:
     # The count was on screen the whole time, which is exactly the sort of true
     # detail nobody reads next to a success word: the person ran `save` so that
     # they would have something to go back to, saw `saved`, and had nothing.
-    uncaptured = _an_uncaptured_file(root) if fc == 0 else ''
+    # Which of the two it was is the walk's to know, and the walk already
+    # recorded it: asking again here would be a second set of exclusion rules
+    # that can disagree with the first, and the old one did.
+    uncaptured = manifest.get('nothing_captured') or {}
 
     if args.json:
         _print_json({'id': snap_id, 'file_count': fc, 'total_size': manifest['total_size'],
@@ -144,7 +104,7 @@ def cmd_save(args) -> int:
         print('nothing captured: this directory has files in it and the '
               'snapshot has none.')
         print('       e.g. {}  ({})'.format(
-            row(uncaptured), _why_nothing_was_captured(root)))
+            row(uncaptured.get('path', '')), row(uncaptured.get('reason', ''))))
         print('       {} exists but holds nothing, so `unedit back` to it '
               'restores'.format(snap_id))
         print('       nothing — and clears whatever is here now.')
@@ -184,8 +144,7 @@ def cmd_save(args) -> int:
 
 def cmd_list(args) -> int:
     root = os.path.abspath(args.dir)
-    store = _store._store_dir(root)
-    snaps, damaged = _store.scan_snapshots(store)
+    snaps, damaged = _store.scan_snapshots(root)
 
     if not snaps and not damaged:
         if args.json:
@@ -223,12 +182,12 @@ def cmd_list(args) -> int:
             })
         _print_json(out)
         if damaged:
-            print(_store.describe_damage(damaged, store), file=sys.stderr)
+            print(_store.describe_damage(damaged, root), file=sys.stderr)
             return 1
         return 0
 
     if damaged:
-        print(_store.describe_damage(damaged, store), file=sys.stderr)
+        print(_store.describe_damage(damaged, root), file=sys.stderr)
 
     # Human-readable table
     # newest first
@@ -236,7 +195,7 @@ def cmd_list(args) -> int:
         ts = _fmt_ts(s.get('timestamp', ''))
         msg = row(s.get('message', ''))
         fc = s.get('file_count', 0)
-        sz = _store._fmt_size(s.get('total_size', 0))
+        sz = _store.fmt_size(s.get('total_size', 0))
         line = '{}  {}  {} files  {}'.format(s['id'], ts, fc, sz)
         if msg:
             line += '  — {}'.format(msg)
@@ -248,9 +207,8 @@ def cmd_list(args) -> int:
 
 def cmd_show(args) -> int:
     root = os.path.abspath(args.dir)
-    store = _store._store_dir(root)
     try:
-        manifest, files = _store.show_snapshot(store, args.id)
+        manifest, files = _store.show_snapshot(root, args.id)
     except RuntimeError as e:
         msg = str(e)
         # Same as `back` and `diff`: an empty store is a normal condition,
@@ -288,7 +246,7 @@ def cmd_show(args) -> int:
         if f['type'] == 'symlink':
             print('  {} -> {}'.format(path, row(f.get('target', ''))))
         else:
-            sz = _store._fmt_size(f.get('size', 0))
+            sz = _store.fmt_size(f.get('size', 0))
             ts_str = ''
             if 'mtime' in f:
                 import datetime
@@ -385,7 +343,7 @@ def cmd_diff(args) -> int:
     if added:
         print('added ({})'.format(len(added)))
         for f in added:
-            sz = _store._fmt_size(f.get('size', 0)) if f['type'] == 'file' else 'symlink'
+            sz = _store.fmt_size(f.get('size', 0)) if f['type'] == 'file' else 'symlink'
             print('  + {}  ({})'.format(row(f['path']), sz))
 
     if modified:
@@ -397,14 +355,14 @@ def cmd_diff(args) -> int:
                     row(f.get('old_target', '?')),
                     row(f.get('new_target', '?'))))
             else:
-                old = _store._fmt_size(f.get('old_size', 0))
-                new = _store._fmt_size(f.get('new_size', 0))
+                old = _store.fmt_size(f.get('old_size', 0))
+                new = _store.fmt_size(f.get('new_size', 0))
                 print('  ~ {}  ({} -> {})'.format(row(f['path']), old, new))
 
     if removed:
         print('removed ({})'.format(len(removed)))
         for f in removed:
-            sz = _store._fmt_size(f.get('size', 0)) if f['type'] == 'file' else 'symlink'
+            sz = _store.fmt_size(f.get('size', 0)) if f['type'] == 'file' else 'symlink'
             print('  - {}  ({})'.format(row(f['path']), sz))
 
     if args.patch and 'patch' in result and result['patch']:
@@ -416,13 +374,12 @@ def cmd_diff(args) -> int:
 
 def cmd_drop(args) -> int:
     root = os.path.abspath(args.dir)
-    store = _store._store_dir(root)
 
     if not args.all and not args.ids:
         return _err('specify a snapshot ID or --all')
 
     try:
-        result = _store.drop_snapshots(store, args.ids or [], all_snaps=args.all)
+        result = _store.drop_snapshots(root, args.ids or [], all_snaps=args.all)
     except RuntimeError as e:
         return _err(str(e))
 
