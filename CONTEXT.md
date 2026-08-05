@@ -19,12 +19,42 @@ inside this repository is vendored and pinned byte-identical to it.
 promise the one wheel makes, and `test_every_import_is_stdlib_or_the_packages_own`
 enforces it. So code two packages both need is not extracted into a shared
 package; it is copied whole and pinned byte-identical by a contract test.
-`shell.py` is in all five that way; `transcript.py` is in two.
+`shell.py` is in all five that way; `terminal.py` is in all five; `transcript.py`
+is in two.
 
 **The shell around a command** (`shell.py`) — the part of a command line that
 is the same in every command line: reconfigure the streams if the locale
 claimed ASCII, flush before leaving, turn ctrl-c into 130 and a closed pipe
 into 141. `main()` returns its exit code rather than raising it.
+
+**Text an agent wrote** — a filename, a command, a commit subject, a snapshot
+message, a locked target. Every tool here prints some, and in four of the five
+it comes out of a file the thing being audited is free to rewrite. It is never
+assumed to be text: it is whatever was on disk.
+
+**What a terminal obeys rather than shows** (`terminal.py`) — the characters a
+terminal acts on instead of drawing, and what each tool does about them. Four
+Unicode categories: `Cc`, where the escapes live; `Cf`, where the bidi overrides
+live; `Zl` and `Zp`, the two separators that end a line for a reader and not for
+`str.splitlines`. Six answers, and which one a column wants is that column's
+business:
+
+- **`one_line`** — every such character becomes a space. A space and not
+  nothing: deleting fuses two components of a path into one word that is not on
+  disk, and it takes back a cell the table already measured, so that row alone
+  stands a cell left of every other.
+- **`block`** — the same, but newlines and tabs stay. For a diff or a rendered
+  table, which are many lines by definition.
+- **`row`** — `one_line`, then bounded, and it says how much it is not showing.
+  Blanking first, because 400 characters cut off the front of a value can still
+  hold a newline.
+- **`quoted`** — escaped rather than blanked, git's spelling, in quotes. For
+  text naming something the reader has to go and find: a path with a space where
+  a control character was is not a path on disk either.
+- **`display_width`** and **`pad`** — a width in cells rather than characters,
+  because a name in Japanese is drawn twice as wide as `len` says and `ljust`
+  puts the next column somewhere else.
+
 
 ## stillworks — behaviour, before and after
 

@@ -4,63 +4,26 @@ from __future__ import annotations
 
 import json
 import os
-import unicodedata
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from .parser import active_spans
+from .terminal import block as safe_for_terminal
+from .terminal import display_width, pad as _pad
 
 
 # ---------------------------------------------------------------------------
 # Utility
 # ---------------------------------------------------------------------------
-
-def safe_for_terminal(text: str) -> str:
-    """Strip everything in a string that a terminal would obey rather than show.
-
-    Commands, paths and titles are printed here exactly as an agent wrote them,
-    which makes this the point where text from outside meets a terminal.  Left
-    alone, an escape sequence clears the screen or retitles the window, and a
-    right-to-left override makes a command read as something other than what
-    ran.  So control characters (Cc) and formatting characters (Cf, where the
-    bidi overrides live) go, along with the two separators that are a newline to
-    a reader but not to ``str.splitlines``.
-
-    Tabs and newlines are kept: they are this module's own layout, applied after
-    the untrusted text has already passed through here.
-    """
-    if text.isprintable():
-        return text                     # the overwhelmingly common case
-    return "".join(
-        "" if (unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp")
-               and c not in "\n\t") else c
-        for c in text)
-
-
-def _cells(char: str) -> int:
-    """How many terminal cells one character is drawn in."""
-    if unicodedata.category(char) in ("Mn", "Me"):
-        # Drawn on top of the character before it; it takes no cell of its own.
-        return 0
-    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-
-
-def display_width(text: str) -> int:
-    """The width of a string in terminal cells, which is not its length.
-
-    Every column below is read by eye, and an eye reads cells.  A project named
-    in Japanese is drawn twice as wide as ``len`` says it is, so a table padded
-    with ``ljust`` puts the next row's columns somewhere else and stops being a
-    table.
-    """
-    if text.isascii():
-        return len(text)                # the overwhelmingly common case
-    return sum(_cells(c) for c in text)
-
-
-def _pad(text: str, width: int) -> str:
-    """``ljust`` in cells rather than characters."""
-    return text + " " * max(0, width - display_width(text))
+#
+# What a terminal obeys rather than shows, and how wide a character is drawn,
+# are facts about terminals rather than about digests: they live in
+# `terminal.py`, which is the same file in the four tools that print.  This
+# module used to answer both itself, and answered the first one wrong -- it
+# *deleted* the character, having measured a cell for it a moment earlier in
+# `_pad`, so a row holding one stood a cell to the left of every other row.
+# `block` replaces it with a space instead, which is the cell that was already
+# measured.  See tests/test_printing_what_an_agent_wrote.py.
 
 
 def _clip(text: str, width: int) -> str:
@@ -69,7 +32,7 @@ def _clip(text: str, width: int) -> str:
         return text
     out, used = [], 0
     for char in text:
-        cells = _cells(char)
+        cells = display_width(char)     # one character's own width, in cells
         if used + cells > width:
             break
         out.append(char)

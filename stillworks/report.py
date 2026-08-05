@@ -8,7 +8,7 @@ import platform
 import sys
 
 from . import core
-from .cli import _one_row
+from .terminal import row as _one_row
 
 
 def build(project_dir):

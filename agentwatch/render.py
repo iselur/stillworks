@@ -11,8 +11,12 @@ import datetime as _dt
 import json
 import os
 import sys
-import unicodedata
 from typing import Dict, Optional
+
+# What a terminal obeys rather than shows, and how wide a character is drawn,
+# are facts about terminals rather than about this layout: they live in
+# `terminal.py`, which is the same file in the four tools that print.
+from .terminal import display_width, one_line, pad as _pad  # noqa: F401
 
 PROJECT_WIDTH = 12
 MIN_TEXT = 20
@@ -164,54 +168,9 @@ def _rule_line(day, width: int, color: bool) -> str:
     return _DIM + text + _RESET if color else text
 
 
-def _clean(text: str) -> str:
-    """Text that cannot do anything to the terminal it is printed on.
-
-    Everything here is text an agent chose, arriving from a file some other
-    program wrote.  Printed as-is, an escape sequence in a command would clear
-    the screen, retitle the window, or leave every later line coloured — and a
-    right-to-left override would let a command read as something it is not.  So
-    both control characters (Cc) and formatting characters (Cf, which is where
-    the bidi overrides live) become spaces, and the caller's whitespace collapse
-    then removes them.  Cf also holds the joiners inside some emoji, which is a
-    price worth paying to make this whole class of problem impossible.
-    """
-    if not any(ord(c) < 32 or ord(c) == 127 or ord(c) > 126 for c in text):
-        return text                     # the overwhelmingly common case
-    return "".join(
-        " " if unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp") else c
-        for c in text)
-
-
-def _cells(char: str) -> int:
-    """How many terminal cells one character is drawn in."""
-    if unicodedata.category(char) in ("Mn", "Me"):
-        # Drawn on top of the character before it; it occupies no cell of its own.
-        return 0
-    return 2 if unicodedata.east_asian_width(char) in ("W", "F") else 1
-
-
-def display_width(text: str) -> int:
-    """The width of a string in terminal cells, which is not its length.
-
-    Every column in this layout is measured in cells, and ``len`` counts
-    characters.  On a Japanese codebase the two differ by a factor of two, so a
-    line that counts characters runs past the edge and wraps — and a wrapped
-    line costs the fixed layout far more than a truncated one does.
-    """
-    if text.isascii():
-        return len(text)                    # the overwhelmingly common case
-    return sum(_cells(c) for c in text)
-
-
-def _pad(text: str, width: int) -> str:
-    """``ljust`` in cells rather than characters."""
-    return text + " " * max(0, width - display_width(text))
-
-
 def _fit(text: str, width: int) -> str:
     """One line, at most ``width`` cells, with a visible cut."""
-    text = " ".join(_clean(text).split())   # newlines in a stream ruin the layout
+    text = " ".join(one_line(text).split())  # newlines in a stream ruin the layout
     if display_width(text) <= width:
         return text
     if width <= 1:
@@ -220,7 +179,7 @@ def _fit(text: str, width: int) -> str:
     # double-width line one cell over the edge, which is the whole bug.
     out, used = [], 0
     for char in text:
-        cells = _cells(char)
+        cells = display_width(char)         # one character's own width, in cells
         if used + cells > width - 1:
             break
         out.append(char)

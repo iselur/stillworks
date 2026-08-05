@@ -21,8 +21,14 @@ import stat
 import string
 import sys
 import time
-import unicodedata
 from typing import Dict, Iterator, List, Optional, Tuple
+
+# What a terminal obeys rather than shows is a fact about terminals rather than
+# about a snapshot store: it lives in `terminal.py`, which is the same file in
+# the four tools that print.  Only the save-time use is here -- what a listing
+# does with a value is the command layer's decision, and it asks `terminal`
+# itself.
+from .terminal import one_line
 
 
 # ---------------------------------------------------------------------------
@@ -133,92 +139,6 @@ def check_safe_root(root: str) -> Optional[str]:
             "cd into a project directory first."
         )
     return None
-
-
-def one_line(text) -> str:
-    """Text that cannot become two rows of a table, or drive the terminal.
-
-    A snapshot message and a filename are both attacker-adjacent: a newline in
-    either forges a row that looks exactly like a real snapshot, and `unedit
-    list` is read by people deciding what to restore.  The same reader is why
-    the formatting characters go too — a right-to-left override makes a path
-    read as a different file from the one that will be written back.
-    """
-    if not isinstance(text, str):
-        return ''
-    return ''.join(' ' if _drives_terminal(ch) else ch for ch in text)
-
-
-def block(text) -> str:
-    """The same, for text that is meant to have lines in it.
-
-    A unified diff is many lines by definition, so the newlines stay; what goes
-    is everything else a terminal would obey rather than show.  This is display
-    only — restoring reads the stored object and never this text — so nothing
-    downstream depends on the characters being kept.
-    """
-    if not isinstance(text, str):
-        return ''
-    return ''.join(
-        ch if ch in '\n\t' else (' ' if _drives_terminal(ch) else ch)
-        for ch in text)
-
-
-def _cells(ch: str) -> int:
-    """How many terminal cells one character is drawn in."""
-    if unicodedata.category(ch) in ('Mn', 'Me'):
-        # Drawn on top of the character before it; it takes no cell of its own.
-        return 0
-    return 2 if unicodedata.east_asian_width(ch) in ('W', 'F') else 1
-
-
-def display_width(text: str) -> int:
-    """The width of a string in terminal cells, which is not its length.
-
-    A file listing is read by eye, and an eye reads cells.  A filename in
-    Japanese is drawn twice as wide as ``len`` says it is, so a column padded
-    with ``ljust`` puts the size beside it somewhere else and the list stops
-    lining up — and non-ASCII filenames are entirely ordinary.
-    """
-    if text.isascii():
-        return len(text)                # the overwhelmingly common case
-    return sum(_cells(ch) for ch in text)
-
-
-def row(text, width=400):
-    """``one_line``, and a bound, for anything about to be printed as a row.
-
-    ``one_line`` stops a value becoming two rows.  This stops it becoming a
-    screenful.  `unedit save -m "$(cat NOTES.md)"` is an ordinary thing for a
-    script to do, and it put a 200,000-character row in `list` and `show` —
-    every other snapshot scrolled away by one of them.
-
-    Separate from ``one_line`` because that one also runs at save time, where
-    the message is written to disk: cutting there would lose the text, not
-    only the room to show it.  Here nothing is lost — the manifest and
-    ``--json`` still have the whole value, and the row says how much it is not
-    showing.
-    """
-    flat = one_line(text)
-    if len(flat) <= width:
-        return flat
-    return "{}… (+{:,} more characters, see --json)".format(
-        flat[:width], len(flat) - width)
-
-
-def pad(text: str, width: int) -> str:
-    """``ljust`` in cells rather than characters."""
-    return text + ' ' * max(0, width - display_width(text))
-
-
-def _drives_terminal(ch: str) -> bool:
-    """True for a character a terminal acts on instead of showing.
-
-    That is the control characters (Cc, which is where the escapes live), the
-    formatting characters (Cf, which is where the bidi overrides live), and the
-    two separators that are a line break to a reader but not to ``splitlines``.
-    """
-    return unicodedata.category(ch) in ('Cc', 'Cf', 'Zl', 'Zp')
 
 
 # ---------------------------------------------------------------------------

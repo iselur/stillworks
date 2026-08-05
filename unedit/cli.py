@@ -24,6 +24,11 @@ import sys
 from . import __version__
 from . import store as _store
 from .shell import run_as_a_command
+# What a terminal obeys rather than shows is a fact about terminals rather than
+# about a snapshot store, so it does not come through `store`: `terminal.py` is
+# the same file in the four tools that print, and which of its answers a
+# particular column wants is this layer's decision to make.
+from .terminal import block, one_line, pad, row
 
 
 def _err(msg: str, code: int = 2) -> int:
@@ -139,19 +144,19 @@ def cmd_save(args) -> int:
         print('nothing captured: this directory has files in it and the '
               'snapshot has none.')
         print('       e.g. {}  ({})'.format(
-            _store.row(uncaptured), _why_nothing_was_captured(root)))
+            row(uncaptured), _why_nothing_was_captured(root)))
         print('       {} exists but holds nothing, so `unedit back` to it '
               'restores'.format(snap_id))
         print('       nothing — and clears whatever is here now.')
     else:
         print('saved  {}  ({} files, {})'.format(snap_id, fc, sz))
         if args.message:
-            print('       {}'.format(_store.row(args.message)))
+            print('       {}'.format(row(args.message)))
         for entry in skipped[:10]:
             # Named, not counted: "3 files skipped" is not something you can
             # act on, and the whole point is deciding whether it mattered.
             print('       not captured: {}  ({})'.format(
-                _store.row(entry.get('path', '')), _store.row(entry.get('reason', ''))))
+                row(entry.get('path', '')), row(entry.get('reason', ''))))
         if len(skipped) > 10:
             print('       ... and {} more not captured'.format(len(skipped) - 10))
         gitignore_hint = os.path.join(root, '.gitignore')
@@ -212,7 +217,7 @@ def cmd_list(args) -> int:
             out.append({
                 'id': s['id'],
                 'timestamp': s.get('timestamp', ''),
-                'message': _store.one_line(s.get('message', '')),
+                'message': one_line(s.get('message', '')),
                 'file_count': s.get('file_count', 0),
                 'total_size': s.get('total_size', 0),
             })
@@ -229,7 +234,7 @@ def cmd_list(args) -> int:
     # newest first
     for s in reversed(snaps):
         ts = _fmt_ts(s.get('timestamp', ''))
-        msg = _store.row(s.get('message', ''))
+        msg = row(s.get('message', ''))
         fc = s.get('file_count', 0)
         sz = _store._fmt_size(s.get('total_size', 0))
         line = '{}  {}  {} files  {}'.format(s['id'], ts, fc, sz)
@@ -272,16 +277,16 @@ def cmd_show(args) -> int:
     # Both come out of the manifest on disk, so both are rows, not text:
     # a newline in the message printed the rest of itself above the file
     # list, in the same shape as the file list.
-    print('snapshot: {}'.format(_store.row(manifest['id'])))
+    print('snapshot: {}'.format(row(manifest['id'])))
     ts = _fmt_ts(manifest.get('timestamp', ''))
-    msg = _store.row(manifest.get('message', ''))
+    msg = row(manifest.get('message', ''))
     print('  when: {}{}'.format(ts, '  — ' + msg if msg else ''))
     print('  {} files'.format(manifest.get('file_count', len(files))))
     print('')
     for f in sorted(files, key=lambda x: x['path']):
-        path = _store.row(f['path'])
+        path = row(f['path'])
         if f['type'] == 'symlink':
-            print('  {} -> {}'.format(path, _store.row(f.get('target', ''))))
+            print('  {} -> {}'.format(path, row(f.get('target', ''))))
         else:
             sz = _store._fmt_size(f.get('size', 0))
             ts_str = ''
@@ -294,7 +299,7 @@ def cmd_show(args) -> int:
             # Padded in cells, not characters: a CJK filename is drawn twice as
             # wide as it is long, and `ljust` would put the size column two
             # places right of where it is on every other row.
-            print('  {}  {:>10s}{}'.format(_store.pad(path, 40), sz, ts_str))
+            print('  {}  {:>10s}{}'.format(pad(path, 40), sz, ts_str))
     return 0
 
 
@@ -369,7 +374,7 @@ def cmd_diff(args) -> int:
     msg = result.get('snapshot_message', '')
     header = 'diff vs {}  {}'.format(snap_id, ts)
     if msg:
-        header += '  — {}'.format(_store.row(msg))
+        header += '  — {}'.format(row(msg))
     print(header)
     print('')
 
@@ -381,30 +386,30 @@ def cmd_diff(args) -> int:
         print('added ({})'.format(len(added)))
         for f in added:
             sz = _store._fmt_size(f.get('size', 0)) if f['type'] == 'file' else 'symlink'
-            print('  + {}  ({})'.format(_store.row(f['path']), sz))
+            print('  + {}  ({})'.format(row(f['path']), sz))
 
     if modified:
         print('modified ({})'.format(len(modified)))
         for f in modified:
             if f['type'] == 'symlink':
                 print('  ~ {}  (symlink: {} -> {})'.format(
-                    _store.row(f['path']),
-                    _store.row(f.get('old_target', '?')),
-                    _store.row(f.get('new_target', '?'))))
+                    row(f['path']),
+                    row(f.get('old_target', '?')),
+                    row(f.get('new_target', '?'))))
             else:
                 old = _store._fmt_size(f.get('old_size', 0))
                 new = _store._fmt_size(f.get('new_size', 0))
-                print('  ~ {}  ({} -> {})'.format(_store.row(f['path']), old, new))
+                print('  ~ {}  ({} -> {})'.format(row(f['path']), old, new))
 
     if removed:
         print('removed ({})'.format(len(removed)))
         for f in removed:
             sz = _store._fmt_size(f.get('size', 0)) if f['type'] == 'file' else 'symlink'
-            print('  - {}  ({})'.format(_store.row(f['path']), sz))
+            print('  - {}  ({})'.format(row(f['path']), sz))
 
     if args.patch and 'patch' in result and result['patch']:
         print('')
-        print(_store.block(result['patch']))
+        print(block(result['patch']))
 
     return 0
 

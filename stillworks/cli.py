@@ -18,6 +18,12 @@ import sys
 
 from . import __version__, core
 from .shell import run_as_a_command
+# What a terminal obeys rather than shows is a fact about terminals rather
+# than about a behaviour lock: it lives in `terminal.py`, which is the same
+# file in the five packages that print.  Every value on a `check` row comes
+# out of a lockfile an agent working in the repo is free to rewrite, so this
+# is the seam that most needs one answer rather than five.
+from .terminal import row as _one_row
 
 
 # The three numbers this tool promises, and the only part of its output a
@@ -183,43 +189,6 @@ def _print_cmd_diff(e):
 
 def _head(text, n=200):
     return text if len(text) <= n else text[:n] + "..."
-
-
-def _one_row(text, width=400):
-    """One record on one row, whatever the lockfile has in it.
-
-    Everything on a `check` row — the id, the target, the note, the arguments,
-    the before and after — is read back out of `.stillworks/lock.json`.  That
-    file is committed and shared, and it is the one file an agent working in
-    the repo is free to rewrite.  Printed straight, a target containing a
-    newline printed as several rows, and the extra ones are indistinguishable
-    from verdicts this tool actually reached:
-
-        GONE     add#1  (add)
-        OK       mul#1  (mul)          <- never verified against anything
-        OK       mul#2  (mul)          <- nor this
-                 function no longer exists (or is no longer public)
-
-    Which is the worst place in the tool for it: `check` exists to answer one
-    question, and those rows answer it falsely.  The counts in the closing
-    summary stay honest, but a reader has no reason to cross-check them.
-
-    Splitting on `splitlines` rather than replacing `\\n` because a terminal
-    also starts a new row on `\\r`, `\\v`, `\\f`, U+2028 and U+2029.  Joining
-    with a space rather than deleting, so two values never fuse into a third
-    that was never in the file.
-
-    The width is generous — a real target or repr is far shorter — but it is a
-    bound, which is the point: an unbounded value printed a 200,000-character
-    row while `was:`/`now:` beneath it had capped since the first release.
-    `--json` is untouched and still carries every value whole.
-    """
-    flat = " ".join(str(text).splitlines())
-    if len(flat) <= width:
-        return flat
-    return "{}… (+{:,} more characters, see --json)".format(
-        flat[:width], len(flat) - width)
-
 
 def cmd_accept(args):
     project = os.path.abspath(args.project)

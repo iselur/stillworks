@@ -14,12 +14,17 @@ import argparse
 import json
 import os
 import sys
-import unicodedata
 
 from . import __version__
 from .git import find_repo_root, get_changes, GitError
 from .rules import RULE_DOCS, SEVERITY, gating_findings, run_rules
 from .shell import run_as_a_command
+# What a terminal obeys rather than shows is a fact about terminals rather than
+# about a review: it lives in `terminal.py`, which is the same file in the four
+# tools that print.  A review names files the reader has to go and find, so it
+# is `quoted` here rather than one of the blanking answers -- a path with a
+# space where a control character was is not a path on disk either.
+from .terminal import quoted
 
 
 # ---------------------------------------------------------------------------
@@ -83,84 +88,11 @@ def _load_ignore(repo_root):
 _SEV_PAD = {"HIGH": "HIGH ", "MED": "MED  ", "LOW": "LOW  "}
 
 
-_HIDDEN = ("Cc", "Cf", "Zl", "Zp")
-
-_ESCAPES = {"\a": "\\a", "\b": "\\b", "\t": "\\t", "\n": "\\n",
-            "\v": "\\v", "\f": "\\f", "\r": "\\r"}
-
-
-def _escape(char):
-    """One character that cannot be shown, written so it can be read."""
-    if char in _ESCAPES:
-        return _ESCAPES[char]
-    n = ord(char)
-    return "\\x{:02x}".format(n) if n < 0x100 else "\\u{:04x}".format(n)
-
-
-def _safe(text):
-    """A path that cannot do anything to the page it is printed on.
-
-    Every line of a review exists to say which file to go and look at, and the
-    path in it was put in the tree by whoever changed the tree.  An escape
-    sequence there clears the screen or retitles the window as the review is
-    read, and a right-to-left override makes the line name a different file
-    from the one that changed — which is the one failure a review cannot
-    afford.  A raw newline is worse still: `--name-status -z` hands paths over
-    exactly as they are on disk, so a directory named with one would end the
-    row and start another that looks just like a finding.
-
-    These used to be deleted, which is safe and silent and leaves the line
-    naming a file that is not there:
-
-        HIGH   depsHIGH   forged.py   x/requirements.txt:1  dependency changed
-
-    `deps` and `HIGH   forged.py   x` were two components of a real path.  On
-    screen they are one word, there is no `depsHIGH` on disk, and nothing says
-    anything was dropped — so the gate says review this file before merge and
-    the file cannot be found.
-
-    So they are escaped rather than dropped, and the path is quoted when any of
-    them is, which is what git itself does and what `git status` shows.  The
-    quoting is what makes the escaping mean something: without it a file named
-    `a\\nb` and a file named `a<newline>b` print identically.  Escapes match
-    git's for the ones anybody meets (`\\n`, `\\t`, `\\r`); rarer characters
-    get `\\xNN` or `\\uNNNN` rather than git's octal, because this is a Python
-    tool and a reader is likelier to know what those mean.
-
-    A backslash or a double quote in an otherwise ordinary name gets the same
-    treatment, for the same reason and again exactly as git does: a file named
-    `a\\nb` on disk has to look different from a file named `a<newline>b`, and
-    it is the quoting that tells them apart.
-
-    Printable paths with neither are returned untouched — `café/naïve.py` is
-    perfectly readable and quoting it would be noise.
-
-    The JSON view is left alone: it is consumed by another program, which wants
-    the path that is really on disk, and JSON's own escaping already makes it
-    safe to print.
-    """
-    text = str(text)
-    if text.isprintable() and '"' not in text and "\\" not in text:
-        return text                     # the overwhelmingly common case
-    if not any(c in '"\\' or unicodedata.category(c) in _HIDDEN for c in text):
-        # Unprintable for some other reason — an unassigned or private-use
-        # codepoint.  It cannot break the row or drive the terminal, so it is
-        # left as it is, as it always was.
-        return text
-    out = []
-    for c in text:
-        if unicodedata.category(c) in _HIDDEN:
-            out.append(_escape(c))
-        elif c in '"\\':
-            out.append("\\" + c)
-        else:
-            out.append(c)
-    return '"' + "".join(out) + '"'
 
 
 def _fmt_finding(f):
-    loc = f"{_safe(f.file)}:{f.line}" if f.line else _safe(f.file)
-    return f"  {_SEV_PAD.get(f.severity, f.severity)}  {loc}  {_safe(f.reason)}"
+    loc = f"{quoted(f.file)}:{f.line}" if f.line else quoted(f.file)
+    return f"  {_SEV_PAD.get(f.severity, f.severity)}  {loc}  {quoted(f.reason)}"
 
 
 def _nothing_reviewed_line(since_ref, staged_only):
@@ -206,7 +138,7 @@ def _unread_lines(unread):
     n = len(unread)
     head = "{} changed file(s) could not be read, so {} not reviewed".format(
         n, "it was" if n == 1 else "they were")
-    return [head] + ["  {}  ({})".format(_safe(p), _safe(why))
+    return [head] + ["  {}  ({})".format(quoted(p), quoted(why))
                      for p, why in unread]
 
 
@@ -330,8 +262,8 @@ def _write_report(findings, changes, since_ref, report_path):
             continue
         lines += [f"## {sev} ({len(group)})", ""]
         for f in group:
-            loc = f"{_safe(f.file)}:{f.line}" if f.line else _safe(f.file)
-            lines.append(f"- **{loc}** — {_safe(f.reason)}")
+            loc = f"{quoted(f.file)}:{f.line}" if f.line else quoted(f.file)
+            lines.append(f"- **{loc}** — {quoted(f.reason)}")
         lines.append("")
 
     if not changes:
@@ -345,7 +277,7 @@ def _write_report(findings, changes, since_ref, report_path):
         # The report outlives the terminal it was made in, so the gap in it has
         # to be written down next to the findings rather than only shouted once.
         lines += ["## Not reviewed ({})".format(len(unread)), ""]
-        lines += ["- **{}** — could not be read ({})".format(_safe(p_), _safe(w))
+        lines += ["- **{}** — could not be read ({})".format(quoted(p_), quoted(w))
                   for p_, w in unread]
         lines.append("")
 
