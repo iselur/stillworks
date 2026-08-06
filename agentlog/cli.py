@@ -53,6 +53,7 @@ from .render import (
 )
 from .html import render_html
 from .window import Unparseable, Window
+from .when import HOW_TO_SPELL_IT
 from .shell import as_typed, run_as_a_command
 
 
@@ -141,8 +142,11 @@ def _build_parser() -> argparse.ArgumentParser:
         nargs="?",
         default=None,
         metavar="ARG",
-        help="argument for 'since' (3d, 12h, 2026-07-15), 'on' (2026-07-15, 3d) "
-             "or 'show' (session ID prefix)",
+        # What `since` takes is read off the table that parses it, so this
+        # cannot go on advertising a spelling the parser dropped -- or stay
+        # quiet about one it gained, which is what happened with `10m`.
+        help="argument for 'since' ({}), 'on' (2026-07-15, 3d) "
+             "or 'show' (session ID prefix)".format(HOW_TO_SPELL_IT),
     )
     p.add_argument("--html", metavar="FILE", help="write self-contained HTML to FILE")
     p.add_argument(

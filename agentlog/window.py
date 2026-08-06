@@ -34,6 +34,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .parser import active_spans
+from .when import HOW_TO_SPELL_IT, is_a_length, parse_moment
 
 #: The commands that name a stretch of time.  `show` and `list` do not.
 PERIODS = ("today", "yesterday", "week")
@@ -92,12 +93,17 @@ class Window:
         if command == "since":
             if not arg:
                 raise Unparseable(
-                    "'since' requires a date or offset (e.g. since 3d)")
-            since = _parse_since(arg, now)
-            if since is None:
-                raise Unparseable(
-                    "could not parse '{}' \u2014 use an ISO date (2026-07-01) "
-                    "or an offset (3d, 12h, 2w)".format(arg))
+                    "'since' requires a date or offset; try {}"
+                    .format(HOW_TO_SPELL_IT))
+            # The message comes back out of the parser rather than being
+            # written here, because a message written here is a second opinion
+            # about what `since` takes -- and the one that used to be here was
+            # wrong, offering `3d, 12h, 2w` on a tool that had never learnt
+            # minutes while its sibling documented `10m` as the usual case.
+            try:
+                since = parse_moment(arg, now)
+            except ValueError as exc:
+                raise Unparseable(str(exc))
             return cls(since, None, "since {}".format(arg))
 
         if command == "on":
@@ -113,8 +119,7 @@ class Window:
                 # `12h` is not a mistake, it is the wrong command for it.  Say
                 # which one is right, and say it only to the person who typed a
                 # length.
-                if (_parse_since(arg, now) is not None
-                        and arg.strip()[-1:].lower() in "hw"):
+                if is_a_length(arg, now):
                     message += ("\n  that is a length, not a day: "
                                 "try 'agentlog since {}'".format(arg))
                 raise Unparseable(message)
@@ -165,44 +170,6 @@ def _today_local(now: Optional[datetime] = None) -> date:
     midnight.
     """
     return (now or datetime.now(timezone.utc)).astimezone().date()
-
-
-def _parse_since(value: str,
-                 now: Optional[datetime] = None) -> Optional[datetime]:
-    """Parse a --since / 'since DATE' argument.
-
-    Accepts:
-      ISO date:  2026-07-15
-      Offset:    3d, 12h, 2w
-    Returns an aware datetime or None on failure.
-    """
-    value = value.strip().lower()
-
-    # Offset form
-    if value and value[-1] in "dhw":
-        try:
-            n = int(value[:-1])
-        except ValueError:
-            return None
-        if n <= 0:
-            # 'since 0d' is an empty window and 'since -3d' is the future;
-            # neither is what anybody meant to type.
-            return None
-        unit = value[-1]
-        try:
-            delta = {"d": timedelta(days=n), "h": timedelta(hours=n),
-                     "w": timedelta(weeks=n)}[unit]
-            return (now or datetime.now(timezone.utc)) - delta
-        except (OverflowError, OSError):
-            # timedelta gives out long before int does.
-            return None
-
-    # ISO date
-    try:
-        d = date.fromisoformat(value)
-        return _local_midnight(d)
-    except ValueError:
-        return None
 
 
 def _parse_day(value: str, now: Optional[datetime] = None

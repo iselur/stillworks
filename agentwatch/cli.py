@@ -18,10 +18,8 @@ from __future__ import annotations
 
 import argparse
 import os
-import re
 import sys
 import time
-from datetime import datetime, timedelta, timezone
 from typing import List, Optional, Tuple
 
 from . import __version__
@@ -29,38 +27,9 @@ from .events import KINDS
 from .follow import DEFAULT_STALE_S, Watcher
 from .printer import Printer
 from .shell import as_typed, run_as_a_command
+from .when import HOW_TO_SPELL_IT, parse_moment
 
 DEFAULT_KINDS = ("cmd", "write", "error", "turn")
-_OFFSET = re.compile(r"^(\d+)\s*([mhdw])$", re.IGNORECASE)
-_UNITS = {"m": "minutes", "h": "hours", "d": "days", "w": "weeks"}
-
-
-def parse_since(raw: str, now: Optional[datetime] = None) -> datetime:
-    """A cutoff from ``10m`` / ``2h`` / ``3d`` / ``1w`` or an ISO date.
-
-    Raises ``ValueError`` with a message meant for the person who typed it.
-    """
-    now = now or datetime.now(timezone.utc)
-    text = (raw or "").strip()
-    if not text:
-        raise ValueError("empty; try --since 10m or --since 2026-08-03")
-    match = _OFFSET.match(text)
-    if match:
-        amount = int(match.group(1))
-        if amount <= 0:
-            raise ValueError("{!r} is not a length of time; use 10m, 2h, 3d".format(raw))
-        try:
-            return now - timedelta(**{_UNITS[match.group(2).lower()]: amount})
-        except OverflowError:
-            raise ValueError("{!r} is further back than time goes".format(raw))
-    try:
-        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-    except ValueError:
-        raise ValueError(
-            "{!r} is not a time; use 10m, 2h, 3d, 1w or 2026-08-03".format(raw))
-    if parsed.tzinfo is None:
-        parsed = parsed.astimezone()
-    return parsed
 
 
 def parse_kinds(raw: str) -> Tuple[str, ...]:
@@ -85,7 +54,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version",
                    version="agentwatch {}".format(__version__))
     p.add_argument("--since", metavar="WHEN",
-                   help="replay activity since 10m / 2h / 3d / 1w / 2026-08-03")
+                   # Read off the table that parses it, so the help and the
+                   # parser cannot come to disagree about the spellings.
+                   help="replay activity since " + HOW_TO_SPELL_IT)
     p.add_argument("--once", action="store_true",
                    help="print what is there and exit, instead of following")
     p.add_argument("--project", metavar="NAME", default="",
@@ -178,7 +149,7 @@ def _run(argv: Optional[List[str]] = None) -> int:
     since = None
     if args.since:
         try:
-            since = parse_since(args.since)
+            since = parse_moment(args.since)
         except ValueError as exc:
             parser.error("--since {}".format(exc))
 
