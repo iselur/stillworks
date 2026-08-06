@@ -43,12 +43,14 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .transcript import (
+    files_a_command_reads,
     is_work_call,
     is_write_tool,
     parse_time,
     patched_files,
     script_commands,
     script_failed,
+    script_workdir,
     tool_path,
 )
 
@@ -538,6 +540,24 @@ def _decode_claude_path(jsonl_path: str) -> str:
 
 # Calls that represent work done on the machine.  Everything else Codex emits
 # (update_plan, spawn_agent, wait, send_message) is coordination, not activity.
+
+
+def _reads_in(command: str, root) -> List[str]:
+    """The files a command read, as absolute paths where that can be known.
+
+    A command names its reads relative to the directory it ran in, the same way
+    an apply_patch envelope names its writes, and for the same reason the
+    writes are resolved here: without it one file appears twice under two
+    spellings and the digest reports two.
+    """
+    out = []
+    for path in files_a_command_reads(command):
+        if not os.path.isabs(path) and isinstance(root, str) and root:
+            path = os.path.normpath(os.path.join(root, path))
+        out.append(path)
+    return out
+
+
 def parse_codex_session(path: str) -> Optional[Dict]:
     """Parse one Codex JSONL file.  Returns a session dict or None."""
     # Filename pattern: rollout-DATE-SESSION_ID.jsonl
@@ -558,6 +578,7 @@ def parse_codex_session(path: str) -> Optional[Dict]:
     turn_out = 0
     saw_total = False
     commands: List[str] = []
+    files_read: List[str] = []
     files_written: List[str] = []
     # call_id -> command, so a non-zero exit names the command that failed
     call_cmds: Dict[str, str] = {}
@@ -693,9 +714,16 @@ def parse_codex_session(path: str) -> Optional[Dict]:
                 raw_input = payload.get("input")
                 found = script_commands(raw_input)
                 call_id = _text(payload.get("call_id"))
+                # A command names its reads the way it names its writes: in
+                # its own text.  Codex has no read tool to look them up in.
+                where = (script_workdir(raw_input)
+                         if isinstance(raw_input, str) else "")
                 for cmd in found:
                     commands.append(cmd)
                     s["events"].append((ts, "cmd", cmd))
+                    for path in _reads_in(cmd, where or s["project"]):
+                        files_read.append(path)
+                        s["events"].append((ts, "read", path))
                 # The same call can carry a patch envelope instead of a
                 # command.  The files are remembered rather than recorded:
                 # patch_apply_end says whether the patch actually landed, and
@@ -743,6 +771,10 @@ def parse_codex_session(path: str) -> Optional[Dict]:
                 if cmd:
                     commands.append(cmd)
                     s["events"].append((ts, "cmd", cmd))
+                    for path in _reads_in(
+                            cmd, _text(args.get("workdir")) or s["project"]):
+                        files_read.append(path)
+                        s["events"].append((ts, "read", path))
                     call_id = _text(payload.get("call_id"))
                     if call_id:
                         call_cmds[call_id] = cmd
@@ -793,6 +825,7 @@ def parse_codex_session(path: str) -> Optional[Dict]:
     if s["start"] and s["end"]:
         s["duration_s"] = (s["end"] - s["start"]).total_seconds()
     s["commands"] = _dedup(commands)
+    s["files_read"] = _dedup(files_read)
     s["files_written"] = _dedup(files_written)
     if not saw_total:
         tok_in, tok_out = turn_in, turn_out

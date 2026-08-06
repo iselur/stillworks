@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
 from .transcript import (
+    files_a_command_reads,
     is_work_call,
     is_write_tool,
     parse_time,
@@ -386,6 +387,23 @@ def _codex_writes(paths, root, tr: Tracker, at, sent=False) -> List[Dict]:
     return out
 
 
+def _codex_reads(command, root, tr: Tracker, at) -> List[Dict]:
+    """The reads a Codex command names, resolved the way its writes are.
+
+    Claude reads a file by calling a tool named ``Read``, so ``--reads`` was
+    handed a path.  Codex has no read tool: it runs ``sed -n '1,200p' x.py``
+    and the command text is the only record.  Without this the flag accepts a
+    Codex log and prints nothing, which reads as a quiet session rather than
+    as a flag that was never wired up.
+    """
+    out: List[Dict] = []
+    for path in files_a_command_reads(command):
+        if not os.path.isabs(path) and root:
+            path = os.path.normpath(os.path.join(root, path))
+        out.append(tr._event(at, "read", path))
+    return out
+
+
 def _codex_script(payload: Dict, tr: Tracker, at) -> List[Dict]:
     """A ``custom_tool_call`` — how current Codex runs everything.
 
@@ -401,12 +419,19 @@ def _codex_script(payload: Dict, tr: Tracker, at) -> List[Dict]:
     tr.running(call_id)
     out: List[Dict] = []
 
+    where = script_workdir(raw)
     for cmd in script_commands(raw):
         # The first command in a snippet is the one the failure is named after:
         # by the time the result arrives, several may have run.
         if not tr.recall(call_id):
             tr.remember(call_id, cmd)
         out.append(tr._event(at, "cmd", cmd))
+        # Claude reads a file by calling a tool named Read, so `--reads` had a
+        # path handed to it.  Codex has no read tool: it runs `sed -n` and the
+        # only record is the command.  Without this the flag accepts a Codex
+        # log and shows nothing, which reads as a quiet session rather than an
+        # unimplemented flag.
+        out.extend(_codex_reads(cmd, where or tr.project or "", tr, at))
 
     # A snippet that only sends a patch has no command in it to be named after,
     # and the failure that may follow carries nothing but the call id.  The
@@ -423,10 +448,8 @@ def _codex_script(payload: Dict, tr: Tracker, at) -> List[Dict]:
     # Codex does not always announce a cwd, but every exec snippet carries a
     # workdir.  Without reading it, the project column stays empty for a whole
     # session that was never in doubt.
-    if not tr.project:
-        found = script_workdir(raw)
-        if found:
-            tr.project = found
+    if not tr.project and where:
+        tr.project = where
 
     # Deliberately no write here.  The envelope in the snippet only proves one
     # was sent; the patch_apply_end that usually follows says whether it
@@ -460,10 +483,11 @@ def _codex_call(payload: Dict, tr: Tracker, at) -> List[Dict]:
     if not isinstance(patch, str):
         patch = ""
     out: List[Dict] = []
+    root = args.get("workdir") or tr.project or ""
     if cmd:
         tr.remember(call_id, cmd)
         out.append(tr._event(at, "cmd", cmd))
-    root = args.get("workdir") or tr.project or ""
+        out.extend(_codex_reads(cmd, root, tr, at))
     out.extend(_codex_writes(patched_files(patch or cmd), root, tr, at,
                              sent=True))
     return out

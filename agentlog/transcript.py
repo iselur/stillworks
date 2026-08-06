@@ -29,6 +29,8 @@ this module knows:
   * which Codex calls are work rather than chatter;
   * how a Codex exec snippet carries its commands, its working directory, and
     the file-patch envelope that is the only record Codex keeps of a write;
+  * which files a Codex command read, since Codex has no read tool and reads by
+    running one;
   * how a Codex call says it failed.
 
 What it does not know: what any of that means, what to count, what to print,
@@ -48,6 +50,7 @@ from __future__ import annotations
 
 import json
 import re
+import shlex
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
@@ -260,3 +263,166 @@ def script_failed(output) -> bool:
     else:
         return False
     return text.strip()[:40].lower().startswith(_SCRIPT_FAILED)
+
+
+# ---------------------------------------------------------------------------
+# Codex: the files a command read
+# ---------------------------------------------------------------------------
+#
+# Claude Code reads a file by calling a tool named `Read`, so the path is a
+# field and finding it is a lookup.  Codex has no read tool.  It reads a file by
+# running `sed -n '1,200p' notes.md`, and the only record of what it read is the
+# text of the command — the same place its writes hide, and for the same reason.
+#
+# So both readers reported that a Codex session read nothing.  Every one of
+# them, since the first release: `files read` was a Claude-only fact wearing a
+# name that did not say so, and `agentwatch --reads` was a flag that did nothing
+# on half the logs it accepts.
+#
+# The risk here is not missing a read.  It is inventing one — a path in a digest
+# that was never opened is worse than a digest that stays quiet — so everything
+# below is built to under-report.  A verb is listed only if it opens every
+# argument it is given; nothing that searches, globs, or walks a directory is
+# listed at all, because `rg pattern src/` puts a pattern, a glob and a
+# directory in the same position a path goes and the text cannot say which is
+# which.  Measured against the 1,217 Codex sessions on the machine this was
+# written on: of 4,472 paths claimed, 87.5% are a file that still exists, one
+# was a directory, and the rest are the temporary files a session makes and
+# deletes.
+
+# Verbs that open every path they are handed.
+_READS_ITS_ARGS = {
+    "cat", "head", "tail", "nl", "less", "more", "od", "xxd", "strings",
+    "wc", "md5sum", "sha256sum", "sha1sum", "cksum", "base64",
+}
+
+# `sed SCRIPT file...` — the first non-flag word is the script, not a path.
+_SCRIPT_THEN_ARGS = {"sed", "awk"}
+
+# Flags that swallow the word after them, per verb, because `-n` means "quiet"
+# to sed and "how many lines" to head.  One shared table gets one of the two
+# wrong: sharing it lost every `sed -n` read in the corpus, which is far and
+# away the commonest way a Codex session reads a file.
+#
+# Only sed's row is load-bearing, and only by what it leaves out.  The rest are
+# here because they are true, not because a test can see them: `-n`, `-c`, `-j`
+# and `-w` take a number, a number has neither a separator nor an extension, and
+# `_looks_like_a_path` turns it down whether it was swallowed or not.  A mutant
+# that empties head's row survives for that reason and is not a gap — the row is
+# load-bearing the day somebody adds a verb whose flag takes a filename.
+_TAKES_A_VALUE = {
+    "sed": {"-e", "-f", "--expression", "--file"},
+    "awk": {"-v", "-f", "-F"},
+    "head": {"-n", "-c", "--lines", "--bytes"},
+    "tail": {"-n", "-c", "--lines", "--bytes"},
+    "od": {"-A", "-t", "-j", "-N"},
+    "nl": {"-b", "-s", "-w", "-v", "-i"},
+}
+
+# `sed -e SCRIPT file` and `awk -f prog.awk data.csv` put the script behind a
+# flag, so the first non-flag word is a path after all.  Skipping it anyway lost
+# the file: `sed -e 's/a/b/' notes.md` reported nothing read.
+_SCRIPT_COMES_FROM_A_FLAG = {"-e", "-f", "--expression", "--file"}
+
+# One line runs several commands, and a newline separates two as surely as a
+# semicolon does.  A Codex snippet is full of both.
+_STATEMENT_END = re.compile(r"\|\||&&|[|;\n]")
+
+# Sending stderr somewhere is not writing a file anybody meant to write, and
+# `2>/dev/null || true` is how this corpus reads a file that may not be there.
+# Treating the `>` in it as a redirect discarded the whole statement.
+_STDERR_REDIRECT = re.compile(r"\s\d*2>\s*(?:&\d|\S+)")
+
+# Not a path worth reporting: a flag, a variable, a glob, a device file, or a
+# bare word with neither a separator nor an extension — `dispatch` could be
+# anything, and guessing is the one thing this must not do.
+_NOT_A_PATH = re.compile(r"^-|^[$~]|[*?\[\]{}]|^/dev/|^/proc/|^/sys/")
+_HAS_EXTENSION = re.compile(r"\.\w+$")
+
+
+def _looks_like_a_path(word: str) -> bool:
+    # An earlier draft also turned down a `VAR=value` prefix here.  It never
+    # fired: `LC_ALL=C cat x.py` puts the prefix in the verb's position, where
+    # the verb lookup drops the whole statement, and the only word that ever
+    # reached this test with an `=` in it was an argument to a reading verb —
+    # where a file really is named that and really was read.
+    if not word or _NOT_A_PATH.search(word):
+        return False
+    return "/" in word or _HAS_EXTENSION.search(word) is not None
+
+
+def _paths_handed_to(verb: str, words: List[str], skip: int) -> List[str]:
+    """The path-shaped words past the first ``skip`` non-flag ones."""
+    swallows = _TAKES_A_VALUE.get(verb, frozenset())
+    out: List[str] = []
+    seen = 0
+    pending = False
+    for word in words:
+        if pending:
+            pending = False
+            continue
+        if word.startswith("-") and word != "-":
+            if word in swallows:
+                pending = True
+            continue
+        seen += 1
+        if seen <= skip:
+            continue
+        if _looks_like_a_path(word):
+            out.append(word)
+    return out
+
+
+def files_a_command_reads(command) -> List[str]:
+    """Every file a Codex command plainly read, in the order it named them.
+
+    Plainly: the verb is one that opens whatever it is handed, and the word is
+    shaped like a path.  Anything short of that is left out.  The caller is a
+    digest a person reads, and a file listed there that was never opened costs
+    more than one that is missing.
+
+    Paths come back exactly as the command wrote them, which is usually
+    relative to the directory the command ran in — ``script_workdir`` is where
+    that is, for a caller that wants to resolve them.
+    """
+    if not isinstance(command, str) or not command:
+        return []
+    out: List[str] = []
+    for statement in _STATEMENT_END.split(command):
+        statement = _STDERR_REDIRECT.sub("", statement).strip()
+        # A redirect means the statement is writing, and the write list is
+        # where its file belongs.  A heredoc used to be turned down here too;
+        # it never mattered, because the shapes this corpus actually writes
+        # (`cat > x.py <<'EOF'`, `python3 - <<'PY'`) are already turned down by
+        # the redirect or by the verb, and the one shape the heredoc test could
+        # see — `cat notes.md <<EOF` — really did read notes.md.
+        if not statement or ">" in statement:
+            continue
+        try:
+            words = shlex.split(statement)
+        except ValueError:             # unbalanced quotes; not worth guessing at
+            continue
+        if not words:
+            continue
+        verb = words[0].split("/")[-1]
+        rest = words[1:]
+        if verb in _READS_ITS_ARGS:
+            out.extend(_paths_handed_to(verb, rest, 0))
+        elif verb in _SCRIPT_THEN_ARGS:
+            # `sed -i` rewrites the file where it sits.  That is a write, and
+            # the session's write list is where it belongs.
+            if any(word == "-i" or word.startswith("-i") for word in rest):
+                continue
+            # The script is the first non-flag word — unless a flag supplied
+            # it, in which case there is no inline script and the first word is
+            # a file like any other.
+            gave_the_script = any(word in _SCRIPT_COMES_FROM_A_FLAG
+                                  for word in rest)
+            out.extend(_paths_handed_to(verb, rest, 0 if gave_the_script else 1))
+    seen = set()
+    uniq: List[str] = []
+    for path in out:
+        if path not in seen:
+            seen.add(path)
+            uniq.append(path)
+    return uniq

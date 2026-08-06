@@ -52,8 +52,14 @@ sys.path.insert(0, _ROOT)
 # holds the view -- the part that stays two.
 THE_READERS = {"agentlog": "parser.py", "agentwatch": "events.py"}
 
-# What a reader is allowed to ask the format about.  A ninth name here is a
+# What a reader is allowed to ask the format about.  A tenth name here is a
 # decision about the seam rather than something that accumulated.
+#
+# `files_a_command_reads` was the ninth, and it is the shape the rest should
+# follow: both readers had to answer "what did this Codex session read", both
+# would have answered it by walking the command line themselves, and one copy of
+# that walk would have drifted from the other within a release.  A name earns its
+# place here when leaving it out means writing it twice.
 THE_INTERFACE = {
     "parse_time",
     "tool_path",
@@ -63,6 +69,7 @@ THE_INTERFACE = {
     "script_workdir",
     "patched_files",
     "script_failed",
+    "files_a_command_reads",
 }
 
 # Text that only appears in code that is reading one of these two formats: the
@@ -110,7 +117,7 @@ class TestTheyAreOneFile(unittest.TestCase):
                     "\n  ".join(sorted(", ".join(sorted(group))
                                        for group in digests.values()))))
 
-    def test_the_interface_is_the_eight_names_both_readers_were_promised(self):
+    def test_the_interface_is_the_nine_names_both_readers_were_promised(self):
         # Read off the copy, not imported, so this says the same thing whether
         # or not the packages are installed.
         tree = ast.parse(_source("agentlog", "transcript.py"))
