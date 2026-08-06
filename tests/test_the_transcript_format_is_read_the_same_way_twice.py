@@ -48,11 +48,17 @@ import unittest
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
 
-# The two packages that read a session transcript, and the module in each that
-# holds the view -- the part that stays two.
-THE_READERS = {"agentlog": "parser.py", "agentwatch": "events.py"}
+# The two packages that read a session transcript, and the modules in each that
+# hold the view -- the part that stays two.
+#
+# `agentwatch` reads the format from two places: `events.py` turns a line into
+# events, and `follow.py` works out which session and project the file it is
+# tailing belongs to.  Listing only the first left the second free to grow its
+# own reading, which is exactly what it had done.
+THE_READERS = {"agentlog": ("parser.py",),
+               "agentwatch": ("events.py", "follow.py")}
 
-# What a reader is allowed to ask the format about.  A tenth name here is a
+# What a reader is allowed to ask the format about.  A twelfth name here is a
 # decision about the seam rather than something that accumulated.
 #
 # `files_a_command_reads` was the ninth, and it is the shape the rest should
@@ -60,6 +66,16 @@ THE_READERS = {"agentlog": "parser.py", "agentwatch": "events.py"}
 # would have answered it by walking the command line themselves, and one copy of
 # that walk would have drifted from the other within a release.  A name earns its
 # place here when leaving it out means writing it twice.
+#
+# `session_id_for` and `decode_claude_project` are the tenth and eleventh, and
+# they are what happens when a name does not earn its place in time.  Both
+# answer questions about a transcript's *location* -- which sitting it belongs
+# to, which project that sitting was in -- and both were written twice, once
+# correctly in `agentwatch` and once wrongly in `agentlog`, where a subagent's
+# project came out as the literal word `subagents` and an ordinary one lost the
+# leading slash off its path.  Wrong in a way nobody could see: they are
+# plausible-looking labels either way.  Two copies, one of them quietly wrong,
+# for as long as both existed.
 THE_INTERFACE = {
     "parse_time",
     "tool_path",
@@ -70,6 +86,8 @@ THE_INTERFACE = {
     "patched_files",
     "script_failed",
     "files_a_command_reads",
+    "session_id_for",
+    "decode_claude_project",
 }
 
 # Text that only appears in code that is reading one of these two formats: the
@@ -117,7 +135,7 @@ class TestTheyAreOneFile(unittest.TestCase):
                     "\n  ".join(sorted(", ".join(sorted(group))
                                        for group in digests.values()))))
 
-    def test_the_interface_is_the_nine_names_both_readers_were_promised(self):
+    def test_the_interface_is_the_eleven_names_both_readers_were_promised(self):
         # Read off the copy, not imported, so this says the same thing whether
         # or not the packages are installed.
         tree = ast.parse(_source("agentlog", "transcript.py"))
@@ -142,25 +160,27 @@ class TestBothReadersGoThroughIt(unittest.TestCase):
                 for alias in node.names}
 
     def test_each_reader_asks_the_format_module(self):
-        for package, module in sorted(THE_READERS.items()):
-            with self.subTest(package):
-                asked = self._imported(package, module)
-                self.assertTrue(
-                    asked, "{}/{} stopped importing from transcript.py"
-                    .format(package, module))
-                self.assertLessEqual(
-                    asked, THE_INTERFACE,
-                    "{}/{} reaches past the interface into transcript's "
-                    "privates: {}".format(package, module,
-                                          sorted(asked - THE_INTERFACE)))
+        for package, modules in sorted(THE_READERS.items()):
+            for module in modules:
+                with self.subTest(package + "/" + module):
+                    asked = self._imported(package, module)
+                    self.assertTrue(
+                        asked, "{}/{} stopped importing from transcript.py"
+                        .format(package, module))
+                    self.assertLessEqual(
+                        asked, THE_INTERFACE,
+                        "{}/{} reaches past the interface into transcript's "
+                        "privates: {}".format(package, module,
+                                              sorted(asked - THE_INTERFACE)))
 
     def test_between_them_they_use_all_of_it(self):
         # A name nothing asks for is a name that is wrong without anyone
         # finding out.  `script_workdir` has one caller today and is kept
         # anyway -- but one caller, not none.
         used = set()
-        for package, module in THE_READERS.items():
-            used |= self._imported(package, module)
+        for package, modules in THE_READERS.items():
+            for module in modules:
+                used |= self._imported(package, module)
         self.assertEqual(
             THE_INTERFACE - used, set(),
             "transcript.py offers names no reader asks for: {}"
@@ -171,24 +191,25 @@ class TestNeitherReaderKeepsItsOwnCopy(unittest.TestCase):
     """How the first duplication started: one regex, where it was needed."""
 
     def test_no_reader_declares_a_format_fact_of_its_own(self):
-        for package, module in sorted(THE_READERS.items()):
-            with self.subTest(package):
-                source = _source(package, module)
-                tree = ast.parse(source)
-                for node in tree.body:
-                    if not isinstance(node, (ast.Assign, ast.AnnAssign)):
-                        continue
-                    # Backslashes dropped first: a regex spells the patch
-                    # marker `\*\*\* `, which is the same fact and does not
-                    # contain the string it is about.
-                    text = (ast.get_source_segment(source, node) or "")
-                    text = text.replace("\\", "")
-                    for fact in THE_FORMAT_FACTS:
-                        self.assertNotIn(
-                            fact, text,
-                            "{}/{} declares {!r} again -- that fact belongs in "
-                            "transcript.py, where the other reader can see it"
-                            .format(package, module, fact))
+        for package, modules in sorted(THE_READERS.items()):
+            for module in modules:
+                with self.subTest(package + "/" + module):
+                    source = _source(package, module)
+                    tree = ast.parse(source)
+                    for node in tree.body:
+                        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                            continue
+                        # Backslashes dropped first: a regex spells the patch
+                        # marker `\*\*\* `, which is the same fact and does not
+                        # contain the string it is about.
+                        text = (ast.get_source_segment(source, node) or "")
+                        text = text.replace("\\", "")
+                        for fact in THE_FORMAT_FACTS:
+                            self.assertNotIn(
+                                fact, text,
+                                "{}/{} declares {!r} again -- that fact belongs "
+                                "in transcript.py, where the other reader can "
+                                "see it".format(package, module, fact))
 
 
 if __name__ == "__main__":

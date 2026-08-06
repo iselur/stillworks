@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 from .events import Tracker, events_from_line
+from .transcript import decode_claude_project, session_id_for
 
 CLAUDE_SUBDIR = os.path.join(".claude", "projects")
 CODEX_SUBDIR = os.path.join(".codex", "sessions")
@@ -70,82 +71,6 @@ def discover(home: str, sources: Tuple[str, ...] = ("claude", "codex")) -> List[
         for path in _walk_jsonl(os.path.join(home, CODEX_SUBDIR)):
             found.append((path, "codex"))
     return found
-
-
-def _subagent_session_dir(path: str) -> str:
-    """The session directory a subagent transcript sits under, or "".
-
-    Claude Code writes a subagent's whole transcript beside its parent's log:
-
-        <project>/<session-id>.jsonl
-        <project>/<session-id>/subagents/agent-<hex>.jsonl
-
-    and one directory deeper when a workflow ran it:
-
-        <project>/<session-id>/subagents/workflows/<run-id>/agent-<hex>.jsonl
-
-    The file is named after the subagent, which names nothing a person can look
-    up.  What names the sitting is the directory holding `subagents`, however
-    many directories the transcript itself sits under — so the search walks up
-    to the nearest `subagents` rather than looking only at the directory the
-    file is in.
-    """
-    here = os.path.dirname(path)
-    while here and here != os.path.dirname(here):
-        if os.path.basename(here) == "subagents":
-            return os.path.dirname(here)
-        here = os.path.dirname(here)
-    return ""
-
-
-def _subagent_parent(path: str) -> str:
-    """The session a subagent transcript belongs to, or "" if it is not one."""
-    return os.path.basename(_subagent_session_dir(path))
-
-
-def session_id_for(path: str, source: str) -> str:
-    """A short, stable id for a session, taken from its filename.
-
-    A subagent's transcript is part of a sitting rather than a sitting of its
-    own, so it answers with the id of the session that spawned it — the work is
-    that session's work, and a reader joining ``--json`` output by session must
-    find it there.  Claude's layout only; Codex writes no subagent transcripts.
-    """
-    if source == "claude":
-        parent = _subagent_parent(path)
-        if parent:
-            return parent
-    base = os.path.splitext(os.path.basename(path))[0]
-    if source == "codex":
-        # rollout-<date>-<uuid>.jsonl — the uuid is the last five dash-parts.
-        parts = base.split("-")
-        if len(parts) >= 5:
-            base = "-".join(parts[-5:])
-    return base
-
-
-def decode_claude_project(path: str) -> str:
-    """Claude Code's encoded project directory, decoded back to a path.
-
-    It stores the project's absolute path as a directory name with ``/``
-    replaced by ``-``, which is ambiguous the moment the path itself contains a
-    dash.  Treat the result as a label of last resort; a ``cwd`` seen in the log
-    always wins.
-    """
-    session_dir = _subagent_session_dir(path)
-    if session_dir:
-        # A subagent transcript sits below its session's directory, so the
-        # project is one further up again — not the directory beside the file,
-        # which is a run id or the word `subagents`.
-        holder = os.path.dirname(session_dir)
-    else:
-        holder = os.path.dirname(path)
-    name = os.path.basename(holder)
-    if name.startswith("-"):
-        # The leading dash is the root slash.  Dropping it leaves a relative
-        # path, which then fails to shorten anything in the output.
-        return "/" + name[1:].replace("-", "/")
-    return name
 
 
 def _probe_project(path: str, source: str, max_lines: int = 60) -> str:

@@ -49,6 +49,7 @@ a fix made in one is a fix in both or it is a failing test.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shlex
 from datetime import datetime, timezone
@@ -426,3 +427,97 @@ def files_a_command_reads(command) -> List[str]:
             seen.add(path)
             uniq.append(path)
     return uniq
+
+
+# ---------------------------------------------------------------------------
+# Where a transcript sits, and what that says about it
+# ---------------------------------------------------------------------------
+#
+# A transcript's own filename and location carry two facts nothing inside the
+# file reliably repeats: which sitting it belongs to, and which project that
+# sitting was in.  Both readers need both, and both had been working them out
+# on their own -- agentwatch correctly, agentlog wrongly in three separate
+# ways at once.  On a real subagent transcript agentlog reported the project
+# as the literal word `subagents`; on an ordinary one it reported
+# `home/val/x`, a relative path, because it dropped the leading dash without
+# putting the root slash back.  Neither is a wrong answer a reader could
+# notice -- they are plausible-looking labels -- which is why they survived.
+#
+# The layout is Claude Code's, and it is the kind of fact this module exists
+# to hold: one place, so a correction lands in both tools or in neither.
+
+
+def _subagent_session_dir(path: str) -> str:
+    """The directory of the session that spawned this subagent, or "".
+
+    Claude Code writes a session as::
+
+        <project>/<session-id>.jsonl
+        <project>/<session-id>/subagents/agent-<hex>.jsonl
+
+    and one directory deeper when a workflow ran it::
+
+        <project>/<session-id>/subagents/workflows/<run-id>/agent-<hex>.jsonl
+
+    The file is named after the subagent, which names nothing a person can look
+    up.  What names the sitting is the directory holding `subagents`, however
+    many directories the transcript itself sits under -- so the search walks up
+    to the nearest `subagents` rather than looking only at the directory the
+    file is in.
+    """
+    here = os.path.dirname(path)
+    while here and here != os.path.dirname(here):
+        if os.path.basename(here) == "subagents":
+            return os.path.dirname(here)
+        here = os.path.dirname(here)
+    return ""
+
+
+def _subagent_parent(path: str) -> str:
+    """The session a subagent transcript belongs to, or "" if it is not one."""
+    return os.path.basename(_subagent_session_dir(path))
+
+
+def session_id_for(path: str, source: str) -> str:
+    """A short, stable id for a session, taken from its filename.
+
+    A subagent's transcript is part of a sitting rather than a sitting of its
+    own, so it answers with the id of the session that spawned it -- the work is
+    that session's work, and a reader joining ``--json`` output by session must
+    find it there.  Claude's layout only; Codex writes no subagent transcripts.
+    """
+    if source == "claude":
+        parent = _subagent_parent(path)
+        if parent:
+            return parent
+    base = os.path.splitext(os.path.basename(path))[0]
+    if source == "codex":
+        # rollout-<date>-<uuid>.jsonl -- the uuid is the last five dash-parts.
+        parts = base.split("-")
+        if len(parts) >= 5:
+            base = "-".join(parts[-5:])
+    return base
+
+
+def decode_claude_project(path: str) -> str:
+    """Claude Code's encoded project directory, decoded back to a path.
+
+    It stores the project's absolute path as a directory name with ``/``
+    replaced by ``-``, which is ambiguous the moment the path itself contains a
+    dash.  Treat the result as a label of last resort; a ``cwd`` seen in the log
+    always wins.
+    """
+    session_dir = _subagent_session_dir(path)
+    if session_dir:
+        # A subagent transcript sits below its session's directory, so the
+        # project is one further up again -- not the directory beside the file,
+        # which is a run id or the word `subagents`.
+        holder = os.path.dirname(session_dir)
+    else:
+        holder = os.path.dirname(path)
+    name = os.path.basename(holder)
+    if name.startswith("-"):
+        # The leading dash is the root slash.  Dropping it leaves a relative
+        # path, which then fails to shorten anything in the output.
+        return "/" + name[1:].replace("-", "/")
+    return name

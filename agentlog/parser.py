@@ -43,6 +43,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .transcript import (
+    decode_claude_project,
     files_a_command_reads,
     is_work_call,
     is_write_tool,
@@ -51,6 +52,7 @@ from .transcript import (
     script_commands,
     script_failed,
     script_workdir,
+    session_id_for,
     tool_path,
 )
 
@@ -334,7 +336,7 @@ def parse_claude_session(
     if seen_uuids is None:
         seen_uuids = set()
     replayed = 0
-    session_id = os.path.splitext(os.path.basename(path))[0]
+    session_id = session_id_for(path, "claude")
     lines, read_err = _read_lines(path)
 
     s = _empty_session(session_id, "claude")
@@ -505,7 +507,7 @@ def parse_claude_session(
         return REPLAY if replayed else None
 
     if not s["project"]:
-        s["project"] = _decode_claude_path(path)
+        s["project"] = decode_claude_project(path)
     s["project_name"] = os.path.basename(s["project"]) if s["project"] else session_id[:8]
     if s["start"] and s["end"]:
         s["duration_s"] = (s["end"] - s["start"]).total_seconds()
@@ -517,21 +519,6 @@ def parse_claude_session(
     if tok_out > 0:
         s["tokens_out"] = tok_out
     return s
-
-
-def _decode_claude_path(jsonl_path: str) -> str:
-    """Best-effort decode of a Claude Code project directory from its encoded path name.
-
-    Claude Code encodes the project's absolute path as the parent directory name
-    by replacing ``/`` with ``-``.  This is ambiguous when the path itself contains
-    dashes; the result is a hint, not a guarantee.  The caller should prefer the
-    ``cwd`` value found in ``user`` records over this fallback.
-    """
-    dir_name = os.path.basename(os.path.dirname(jsonl_path))
-    # Leading '-' signals an absolute path
-    if dir_name.startswith("-"):
-        return dir_name[1:].replace("-", "/")
-    return dir_name
 
 
 # ---------------------------------------------------------------------------
@@ -560,13 +547,7 @@ def _reads_in(command: str, root) -> List[str]:
 
 def parse_codex_session(path: str) -> Optional[Dict]:
     """Parse one Codex JSONL file.  Returns a session dict or None."""
-    # Filename pattern: rollout-DATE-SESSION_ID.jsonl
-    basename = os.path.splitext(os.path.basename(path))[0]
-    # strip leading 'rollout-DATE-' prefix to get the UUID
-    parts = basename.split("-")
-    # UUID is the last 5 dash-separated parts
-    session_id = "-".join(parts[-5:]) if len(parts) >= 5 else basename
-
+    session_id = session_id_for(path, "codex")
     lines, read_err = _read_lines(path)
     s = _empty_session(session_id, "codex")
     s["skipped_lines"] = read_err
