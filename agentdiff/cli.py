@@ -182,10 +182,23 @@ def _print_review(findings, changes, strict, out=None,
 # Output: JSON
 # ---------------------------------------------------------------------------
 
-def _print_review_json(findings, changes, strict):
-    gating = gating_findings(findings, strict=strict)
+def _review_document(findings, changes, strict):
+    """The object `--json` prints — for a run that finished and one that did not.
+
+    One builder for both, because the shape is a promise.  The README says the
+    exit code is the same either way, so a script can gate on the code and read
+    the object for the detail; that is only true if the object has the same
+    keys either way.  It did not.  A run that hit a git error, or a `--project`
+    that is not a directory, printed five of the seven keys — no `reviewed`, no
+    `unread` — so a script asking `data["reviewed"]` raised a KeyError at
+    exactly the moment the field was written for.
+
+    Adding a key here adds it to both.  That is the whole reason this is a
+    function rather than two dict literals that agreed on the day they were
+    written.
+    """
     unread = _unread_changes(changes)
-    data = {
+    return {
         "findings": [
             {
                 "severity": f.severity,
@@ -206,11 +219,15 @@ def _print_review_json(findings, changes, strict):
         # verdict on contents nobody saw is not a verdict.
         "clean": len(findings) == 0 and not unread,
         "unread": [{"file": p, "reason": why} for p, why in unread],
-        "gate_triggered": len(gating) > 0,
+        "gate_triggered": len(gating_findings(findings, strict=strict)) > 0,
         "counts": {s: sum(1 for f in findings if f.severity == s) for s in SEVERITY},
     }
-    print(json.dumps(data, indent=2))
-    return 1 if (gating or unread) else 0
+
+
+def _print_review_json(findings, changes, strict):
+    print(json.dumps(_review_document(findings, changes, strict), indent=2))
+    return 1 if (gating_findings(findings, strict=strict)
+                 or _unread_changes(changes)) else 0
 
 
 # ---------------------------------------------------------------------------
@@ -264,16 +281,29 @@ def _write_report(findings, changes, since_ref, report_path):
 # Commands
 # ---------------------------------------------------------------------------
 
-def _json_error(message):
-    """Print a JSON error document to stdout and return 2."""
-    print(json.dumps({
-        "error": message,
-        "findings": [],
-        "files_changed": 0,
-        "clean": False,
-        "gate_triggered": False,
-        "counts": {"HIGH": 0, "MED": 0, "LOW": 0},
-    }))
+def _failed(args, message):
+    """Say why agentdiff stopped, in whichever way the caller asked to be told.
+
+    Six call sites each knew four things: the word in front of the message,
+    which stream it goes to, which exit code, and — on the `--json` path — the
+    shape of the error document.  Four facts written six times is four facts
+    that can drift six ways, and one of them already had.
+
+    The word in front is `agentdiff`, not `error`.  Four of the five commands
+    in this family say their own name when they fail, and they are five
+    commands out of one install: in a build log with all of them running, a
+    line beginning `error:` does not say who is talking.
+    """
+    if getattr(args, "json", False):
+        # The same seven keys a finished run prints, plus `error`.  `clean` is
+        # false rather than absent, because a review that never happened is not
+        # a review that found nothing — and `clean` is the field CI gates on.
+        data = {"error": message}
+        data.update(_review_document([], [], strict=False))
+        data["clean"] = False
+        print(json.dumps(data, indent=2))
+        return 2
+    print("agentdiff: {}".format(message), file=sys.stderr)
     return 2
 
 
@@ -283,10 +313,7 @@ def cmd_review(args):
     try:
         repo_root = _resolve_repo_root(args)
     except GitError as e:
-        if use_json:
-            return _json_error(str(e))
-        print(f"error: {e}", file=sys.stderr)
-        return 2
+        return _failed(args, str(e))
 
     since_ref = args.since or "HEAD"
     scope_globs = list(args.scope) if args.scope else _scope.read(repo_root)
@@ -299,10 +326,7 @@ def cmd_review(args):
             staged_only=getattr(args, "staged_only", False),
         )
     except GitError as e:
-        if use_json:
-            return _json_error(str(e))
-        print(f"error: {e}", file=sys.stderr)
-        return 2
+        return _failed(args, str(e))
 
     findings = run_rules(changes, scope_globs=scope_globs, ignore_patterns=ignore_patterns)
 
@@ -312,11 +336,8 @@ def cmd_review(args):
         except OSError as e:
             # The report is the evidence.  Printing the review as if it had been
             # written leaves somebody looking for a file that is not there.
-            msg = "could not write report to {}: {}".format(args.report, e)
-            if use_json:
-                return _json_error(msg)
-            print("error: {}".format(msg), file=sys.stderr)
-            return 2
+            return _failed(args, "could not write report to {}: {}"
+                                 .format(args.report, e))
 
     if use_json:
         return _print_review_json(findings, changes, args.strict)
@@ -329,20 +350,17 @@ def cmd_scope(args):
     try:
         repo_root = _resolve_repo_root(args)
     except GitError as e:
-        print(f"error: {e}", file=sys.stderr)
-        return 2
+        return _failed(args, str(e))
 
     try:
         stored = _scope.write(repo_root, args.globs)
     except _scope.ScopeError as e:
         # Which globs may be stored is the format's business, and the format
-        # says why.  This command's job is the exit code and the `error:`.
-        print(f"error: {e}", file=sys.stderr)
-        return 2
+        # says why.  This command's job is the exit code and the name in front.
+        return _failed(args, str(e))
     except OSError as e:
-        print(f"error: could not save scope to {_scope.path(repo_root)}: {e}",
-              file=sys.stderr)
-        return 2
+        return _failed(args, "could not save scope to {}: {}"
+                             .format(_scope.path(repo_root), e))
     # What is printed is what went into the file, not what was typed.  Today
     # those are the same bytes even where the two are different strings -- on a
     # machine with no locale the argument arrives as surrogates, and `shell`
