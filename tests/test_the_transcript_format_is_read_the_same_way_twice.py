@@ -58,8 +58,8 @@ sys.path.insert(0, _ROOT)
 THE_READERS = {"agentlog": ("parser.py",),
                "agentwatch": ("events.py", "follow.py")}
 
-# What a reader is allowed to ask the format about.  A twelfth name here is a
-# decision about the seam rather than something that accumulated.
+# What a reader is allowed to ask the format about.  A fourteenth name here is
+# a decision about the seam rather than something that accumulated.
 #
 # `files_a_command_reads` was the ninth, and it is the shape the rest should
 # follow: both readers had to answer "what did this Codex session read", both
@@ -76,6 +76,15 @@ THE_READERS = {"agentlog": ("parser.py",),
 # leading slash off its path.  Wrong in a way nobody could see: they are
 # plausible-looking labels either way.  Two copies, one of them quietly wrong,
 # for as long as both existed.
+#
+# `patch_result` and `mcp_failure` are the twelfth and thirteenth, and they are
+# the first two here that are about *wording* rather than about reading.  Both
+# readers had nine lines each deciding what to call a Codex failure, identical
+# down to the three-name truncation and the colon after it -- which means the
+# truncation was decided once and copied, and either copy could have become
+# four names without the other moving.  What that costs is not the lines: a
+# person running both tools would have been told about one failure in two
+# different sentences, and neither tool could have known.
 THE_INTERFACE = {
     "parse_time",
     "tool_path",
@@ -88,6 +97,8 @@ THE_INTERFACE = {
     "files_a_command_reads",
     "session_id_for",
     "decode_claude_project",
+    "patch_result",
+    "mcp_failure",
 }
 
 # Text that only appears in code that is reading one of these two formats: the
@@ -102,6 +113,12 @@ THE_FORMAT_FACTS = (
     "script failed",
     "workdir",
 )
+
+# What a Codex failure is called.  Unlike the facts above, these are checked
+# against the whole source rather than its module-level definitions: nobody
+# declares a message as a constant on the way to writing it once, and both
+# copies of these were literals sitting inside the branch that printed them.
+THE_FAILURE_LABELS = ("patch did not apply", "mcp call failed")
 
 
 def _path(package, module):
@@ -135,7 +152,7 @@ class TestTheyAreOneFile(unittest.TestCase):
                     "\n  ".join(sorted(", ".join(sorted(group))
                                        for group in digests.values()))))
 
-    def test_the_interface_is_the_eleven_names_both_readers_were_promised(self):
+    def test_the_interface_is_the_thirteen_names_both_readers_were_promised(self):
         # Read off the copy, not imported, so this says the same thing whether
         # or not the packages are installed.
         tree = ast.parse(_source("agentlog", "transcript.py"))
@@ -210,6 +227,27 @@ class TestNeitherReaderKeepsItsOwnCopy(unittest.TestCase):
                                 "{}/{} declares {!r} again -- that fact belongs "
                                 "in transcript.py, where the other reader can "
                                 "see it".format(package, module, fact))
+
+    def test_no_reader_words_a_failure_of_its_own(self):
+        """The check above would not have caught these, and they were there.
+
+        A format fact tends to arrive as a module-level regex or dict, which is
+        why that check reads definitions.  A *message* arrives as a literal in
+        the branch that prints it, three levels in, and both readers had one.
+        So this one reads the whole source: anywhere either tool spells out
+        what a Codex failure is called, it has stopped asking.
+        """
+        for package, modules in sorted(THE_READERS.items()):
+            for module in modules:
+                with self.subTest(package + "/" + module):
+                    source = _source(package, module)
+                    for label in THE_FAILURE_LABELS:
+                        self.assertNotIn(
+                            label, source,
+                            "{}/{} writes {!r} itself -- ask patch_result or "
+                            "mcp_failure for it, so the two tools cannot end "
+                            "up describing one failure two ways"
+                            .format(package, module, label))
 
 
 if __name__ == "__main__":

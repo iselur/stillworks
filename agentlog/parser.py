@@ -47,7 +47,9 @@ from .transcript import (
     files_a_command_reads,
     is_work_call,
     is_write_tool,
+    mcp_failure,
     parse_time,
+    patch_result,
     patched_files,
     script_commands,
     script_failed,
@@ -612,44 +614,28 @@ def parse_codex_session(path: str) -> Optional[Dict]:
                 saw_patch_end = True
                 # The only record that says which files a patch actually
                 # changed, and the only one that admits a patch that did not
-                # apply.  Reading the envelope in the call instead would list
-                # edits that never reached the disk.  Paths here are absolute.
-                changes = payload.get("changes")
-                paths = sorted(changes) if isinstance(changes, dict) else []
-                if payload.get("success", True):
-                    for path in paths:
-                        files_written.append(path)
-                        s["write_counts"][path] = \
-                            s["write_counts"].get(path, 0) + 1
-                        s["events"].append((ts, "write", path))
-                else:
-                    names = ", ".join(os.path.basename(p) for p in paths[:3])
-                    label = "patch did not apply" + (": " + names if names else "")
+                # apply.  Paths here are absolute.
+                paths, failure = patch_result(payload)
+                for path in paths:
+                    files_written.append(path)
+                    s["write_counts"][path] = \
+                        s["write_counts"].get(path, 0) + 1
+                    s["events"].append((ts, "write", path))
+                if failure:
                     s["errors"] += 1
-                    s["failed_cmds"].append(label)
-                    s["events"].append((ts, "error", label))
+                    s["failed_cmds"].append(failure)
+                    s["events"].append((ts, "error", failure))
             elif pt == "mcp_tool_call_end":
-                # An MCP call reports itself here and nowhere else, and its
-                # result is either {"Ok": ...} or {"Err": "..."}.  A failed one
-                # is a failure exactly like a command that exited non-zero, and
-                # a session whose only failures were these used to read
-                # `0 errors` — a claim, not a partial count.
-                #
-                # A successful call is deliberately not turned into a command:
-                # an MCP call is not a shell command, and `commands` means one
-                # thing.  Only the failure is news.
-                result = payload.get("result")
-                if isinstance(result, dict) and "Err" in result:
-                    inv = _obj(payload.get("invocation"))
-                    server = _text(inv.get("server"))
-                    tool = _text(inv.get("tool"))
-                    # The tool name alone does not say which server was down,
-                    # so both are shown where both are known.
-                    what = "/".join(p for p in (server, tool) if p)
-                    label = "mcp " + what if what else "mcp call failed"
+                # An MCP call reports itself here and nowhere else, and only a
+                # failed one is news — `mcp_failure` says which and what to
+                # call it.  A failure here is a failure exactly like a command
+                # that exited non-zero, and a session whose only failures were
+                # these used to read `0 errors`: a claim, not a partial count.
+                failure = mcp_failure(payload)
+                if failure:
                     s["errors"] += 1
-                    s["failed_cmds"].append(label)
-                    s["events"].append((ts, "error", label))
+                    s["failed_cmds"].append(failure)
+                    s["events"].append((ts, "error", failure))
             elif pt == "token_count":
                 # Two usage blocks sit side by side in this record and only
                 # one of them is the session.  `last_token_usage` is the turn

@@ -31,7 +31,7 @@ this module knows:
     the file-patch envelope that is the only record Codex keeps of a write;
   * which files a Codex command read, since Codex has no read tool and reads by
     running one;
-  * how a Codex call says it failed.
+  * how a Codex call says it failed, and what to call the failure.
 
 What it does not know: what any of that means, what to count, what to print,
 what a session is, or what an event is.  Those are the two views, and they stay
@@ -53,7 +53,7 @@ import os
 import re
 import shlex
 from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 # ---------------------------------------------------------------------------
 # Time
@@ -264,6 +264,82 @@ def script_failed(output) -> bool:
     else:
         return False
     return text.strip()[:40].lower().startswith(_SCRIPT_FAILED)
+
+
+# ---------------------------------------------------------------------------
+# Codex: what a failed call is called
+# ---------------------------------------------------------------------------
+#
+# `script_failed` above answers whether a call failed.  These two answer what to
+# write down when it did — which is a different question, and one both readers
+# were answering for themselves, in nine identical lines each, down to the
+# three-name truncation and the colon.  That is to say the truncation was a
+# decision taken once and copied, and the second copy was free to become four
+# names on any afternoon without anything noticing.
+#
+# The wording is here rather than at the call sites for the same reason the
+# reading is: `agentlog` prints these labels in a report and `agentwatch` prints
+# them in a live tail, and a person running both should not be told about the
+# same failure in two different sentences.
+
+#: When a patch did not apply, and when an MCP call came back an error.  Both
+#: are what to show when nothing more specific is known — a patch that named no
+#: files, a call whose invocation the log did not record.
+_PATCH_FAILED = "patch did not apply"
+_MCP_FAILED = "mcp call failed"
+
+
+def patch_result(payload: Dict) -> Tuple[List[str], Optional[str]]:
+    """What a Codex ``patch_apply_end`` record says happened.
+
+    Returns the files it claims, sorted, and — if the patch failed — the line
+    to show for it.  A patch that applied has no label; one that did not has no
+    files, because files it did not write are not files it wrote.
+
+    The end record rather than the call is deliberate, and is the whole reason
+    this is read here at all: the envelope in the *call* lists edits that never
+    reached the disk.  ``patched_files`` above is the other half of that, for
+    the calls that did.
+
+    Absence means success.  A record cut off mid-write, or one from a Codex
+    that has not got round to saying, is a patch that applied — the failures
+    are the ones that say so, and guessing the other way turns a truncated log
+    into a session full of errors that never happened.
+    """
+    changes = payload.get("changes")
+    paths = sorted(changes) if isinstance(changes, dict) else []
+    if payload.get("success", True):
+        return paths, None
+    # Three names, because a patch across a dozen files still has to fit on the
+    # one line a live tail gives it, and the first three say which change it
+    # was.
+    names = ", ".join(os.path.basename(p) for p in paths[:3])
+    return [], _PATCH_FAILED + (": " + names if names else "")
+
+
+def mcp_failure(payload: Dict) -> Optional[str]:
+    """The line to show for a Codex ``mcp_tool_call_end``, if it failed.
+
+    ``None`` when the call succeeded, which is most of them.  A successful MCP
+    call is deliberately not news: it is not a shell command, and a reader that
+    turned every one into a command line would trade a missing failure for a
+    wrong command count.  A failed one is a failure exactly like a command that
+    exited non-zero, and a session whose only failures were these used to read
+    ``0 errors`` — a claim, not a partial count.
+
+    The result is either ``{"Ok": ...}`` or ``{"Err": "..."}``.  Server and tool
+    are both named where both are known: `read_mcp_resource` on its own does not
+    say which server was down, and that is the part a person can act on.
+    """
+    result = payload.get("result")
+    if not isinstance(result, dict) or "Err" not in result:
+        return None
+    inv = payload.get("invocation")
+    inv = inv if isinstance(inv, dict) else {}
+    server = inv.get("server") if isinstance(inv.get("server"), str) else ""
+    tool = inv.get("tool") if isinstance(inv.get("tool"), str) else ""
+    what = "/".join(p for p in (server, tool) if p)
+    return "mcp " + what if what else _MCP_FAILED
 
 
 # ---------------------------------------------------------------------------

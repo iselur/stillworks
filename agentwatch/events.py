@@ -30,7 +30,9 @@ from .transcript import (
     files_a_command_reads,
     is_work_call,
     is_write_tool,
+    mcp_failure,
     parse_time,
+    patch_result,
     patched_files,
     script_commands,
     script_failed,
@@ -495,33 +497,21 @@ def _codex_call(payload: Dict, tr: Tracker, at) -> List[Dict]:
 
 def _codex_patch_result(payload: Dict, tr: Tracker, at) -> List[Dict]:
     """``patch_apply_end`` — the only place a failed patch is ever admitted."""
-    changes = payload.get("changes")
-    paths = sorted(changes) if isinstance(changes, dict) else []
-    if payload.get("success", True):
+    paths, failure = patch_result(payload)
+    if failure is None:
         return _codex_writes(paths, tr.project or "", tr, at)
+    # The call id, so the `cmd` line already on screen for this patch can be
+    # marked failed rather than left looking like it worked.
     tr.patch_failure(payload.get("call_id") or "")
-    names = ", ".join(os.path.basename(p) for p in paths[:3])
-    return [tr._event(at, "error", "patch did not apply" + (": " + names if names else ""))]
+    return [tr._event(at, "error", failure)]
 
 
 def _codex_mcp_result(payload: Dict, tr: Tracker, at) -> List[Dict]:
     """``mcp_tool_call_end`` — the only place an MCP call reports itself.
 
-    The result is either ``{"Ok": ...}`` or ``{"Err": "..."}``, and only the
-    failure is news: an MCP call is not a shell command, and a stream that
-    turned every one of them into a ``cmd`` line would trade a missing failure
-    for a wrong command count.  A failed one is what the watcher is for — an
+    Only a failure reaches the stream, and that is what the watcher is for: an
     agent retrying a server that is not running otherwise looks like an agent
     thinking.
     """
-    result = payload.get("result")
-    if not isinstance(result, dict) or "Err" not in result:
-        return []
-    inv = payload.get("invocation")
-    inv = inv if isinstance(inv, dict) else {}
-    server = inv.get("server") if isinstance(inv.get("server"), str) else ""
-    tool = inv.get("tool") if isinstance(inv.get("tool"), str) else ""
-    # Both, where both are known: `read_mcp_resource` on its own does not say
-    # which server was down, and that is the part a person can act on.
-    what = "/".join(p for p in (server, tool) if p)
-    return [tr._event(at, "error", "mcp " + what if what else "mcp call failed")]
+    failure = mcp_failure(payload)
+    return [tr._event(at, "error", failure)] if failure else []
