@@ -28,6 +28,7 @@ from .follow import DEFAULT_STALE_S, Watcher
 from .printer import Printer
 from .shell import as_typed, run_as_a_command
 from .project import HOW_IT_MATCHES
+from .unusable import note_about
 from .when import HOW_TO_SPELL_IT, parse_moment
 
 DEFAULT_KINDS = ("cmd", "write", "error", "turn")
@@ -194,8 +195,7 @@ def _run(argv: Optional[List[str]] = None) -> int:
         # After the "nothing" message, which it qualifies: "nothing new yet" is
         # a claim about the agent, and a locked log makes it a claim about
         # permissions instead.
-        if _unreadable_note(watcher):
-            _note(_unreadable_note(watcher))
+        _note_unreadable(watcher)
         return 0
     return _follow(watcher, args, emit)
 
@@ -214,24 +214,28 @@ def _nothing_message(watcher: Watcher, since, project: str) -> str:
     return "nothing new yet"
 
 
-def _unreadable_note(watcher: Watcher) -> str:
-    """What to say about logs that would not open, or '' if they all did.
+#: How many paths a live view has room to name.  Not `ALL`: this is a screen
+#: being written to while events scroll past it, and a machine with a hundred
+#: locked logs would push the run off the top of it.  Not `0` either — that
+#: line offers a `--verbose` to see the rest, and agentwatch has no such flag,
+#: so the few it names here are the whole of what it can say.
+_ROOM_FOR = 3
+
+
+def _note_unreadable(watcher: Watcher) -> None:
+    """Say which logs would not open, if any would not.
 
     Said on every run, including `--json`, because the alternative is a quiet
-    screen that reads as an idle agent.  Paths are always named — there are
-    rarely more than one or two, and the fix is a chmod on a specific file.
+    screen that reads as an idle agent.
+
+    The words are `unusable.note_about`, which `agentlog` prints from too: one
+    situation, one sentence, in two commands that arrive in one install.  What
+    is decided here is the part that is this tool's own — how many paths a
+    scrolling view has room for.
     """
-    paths = watcher.unreadable()
-    if not paths:
-        return ""
-    n = len(paths)
-    head = "{} session log{} could not be read — that activity is not shown".format(
-        n, "" if n == 1 else "s")
-    shown = paths[:3]
-    lines = [head] + ["    " + p for p in shown]
-    if len(paths) > len(shown):
-        lines.append("    ... and {} more".format(len(paths) - len(shown)))
-    return "\n  ".join(lines)
+    note = note_about(watcher.unreadable(), _ROOM_FOR)
+    if note:
+        _note(note)
 
 
 def _note(text: str) -> None:
@@ -258,8 +262,7 @@ def _follow(watcher: Watcher, args, emit) -> int:
     _note("watching {} session{} · Ctrl-C to stop".format(
         count, "" if count == 1 else "s")
         if count else "waiting for a session to start · Ctrl-C to stop")
-    if _unreadable_note(watcher):
-        _note(_unreadable_note(watcher))
+    _note_unreadable(watcher)
     try:
         emit(first)
         while True:

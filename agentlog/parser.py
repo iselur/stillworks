@@ -807,8 +807,10 @@ def parse_codex_session(path: str) -> Optional[Dict]:
 # Discovery
 # ---------------------------------------------------------------------------
 
-UNREADABLE = "could not be read"
-NO_RECORDS = "had no readable records"
+# Re-exported, not defined: the words belong with the sentence they end up in,
+# which `agentwatch` prints too.  Kept importable from here because this is
+# where they are produced and the callers that read them already import it.
+from .unusable import NO_RECORDS, UNREADABLE  # noqa: F401
 
 
 def _why_unusable(path: str, sess: Optional[Dict]) -> str:

@@ -749,38 +749,5 @@ def _session_for_json(s: Dict) -> Dict:
     return out
 
 
-def render_unusable(unusable: List[tuple], verbose: bool = False) -> str:
-    """One note about log files that exist and were not counted.
-
-    Kept out of every other renderer on purpose: it is true of the whole run,
-    not of the period being reported, so `today` and `week` and `list` all say
-    the same thing about the same files.  Returns '' when there is nothing to
-    say, which is the ordinary case.
-    """
-    if not unusable:
-        return ""
-    n = len(unusable)
-    counts: Dict[str, int] = {}
-    for _path, reason in unusable:
-        counts[reason] = counts.get(reason, 0) + 1
-    if len(counts) == 1:
-        # One kind of problem: the reason reads better without a count in front
-        # of it, since the count is already in the first half of the sentence.
-        why = next(iter(counts))
-    else:
-        why = ", ".join("{} {}".format(c, r) for r, c in sorted(counts.items()))
-    lines = ["note: {} log file{} {} not counted — {}".format(
-        n, "" if n == 1 else "s", "was" if n == 1 else "were", why)]
-    if verbose:
-        # The name is what somebody can act on — chmod it, or go and look at
-        # it.  Without --verbose the count alone at least stops the report
-        # from claiming to be everything.
-        for path, reason in unusable:
-            lines.append("      {}  ({})".format(path, reason))
-    else:
-        lines.append("      (run with --verbose to see which)")
-    return "\n".join(lines)
-
-
 def render_json(sessions: List[Dict]) -> str:
     return json.dumps([_session_for_json(s) for s in sessions], indent=2, default=str)

@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Tuple
 from .events import Tracker, events_from_line
 from .transcript import decode_claude_project, session_id_for
 from .project import matches
+from .unusable import UNREADABLE
 
 CLAUDE_SUBDIR = os.path.join(".claude", "projects")
 CODEX_SUBDIR = os.path.join(".codex", "sessions")
@@ -136,7 +137,7 @@ class Watcher:
         self.project = project or ""
         self._clock = clock or (lambda: datetime.now(timezone.utc).timestamp())
         self._files: Dict[str, _FileState] = {}
-        self._unreadable: set = set()
+        self._unreadable: Dict[str, str] = {}
         self._first_scan = True
         self._found = 0
         self._last_scan = 0.0
@@ -174,9 +175,9 @@ class Watcher:
             # watched in any sense the word is used there.  Left out of
             # ``_files``, it is retried on every scan, so fixing the
             # permissions mid-run is enough to pick it up.
-            self._unreadable.add(path)
+            self._unreadable[path] = UNREADABLE
             return
-        self._unreadable.discard(path)
+        self._unreadable.pop(path, None)
         project = _probe_project(path, source)
         # A cwd read out of the log is the truth; the directory name is a guess,
         # and a wrong one whenever the project's path contains a dash.
@@ -266,9 +267,9 @@ class Watcher:
             # bytes it just grew by are exactly the activity being missed.
             # Silently returning [] here made that indistinguishable from an
             # idle agent, which is the one thing this tool must not do.
-            self._unreadable.add(path)
+            self._unreadable[path] = UNREADABLE
             return []
-        self._unreadable.discard(path)
+        self._unreadable.pop(path, None)
         state.offset += len(chunk)
         data = state.buf + chunk
         # Everything after the last newline is a line still being written.
@@ -341,8 +342,16 @@ class Watcher:
         return len({s.tracker.session for s in self._files.values()
                     if s.offset >= 0})
 
-    def unreadable(self) -> List[str]:
-        """Session logs that exist and could not be opened, sorted.
+    def unreadable(self) -> List[Tuple[str, str]]:
+        """Session logs that exist and could not be opened: (path, why), sorted.
+
+        Pairs and not paths: the reason is known here, at the `except` that
+        produced it, and nowhere else -- a caller handed a bare list of names
+        can tell you a file is missing but not what to do to it, and a chmod
+        is nearly always what to do to it.  Today every pair says the same
+        thing, `UNREADABLE`, because opening is the only thing this class
+        tries; the shape is the seam's, shared with `agentlog`, which reaches
+        the same situation for a second reason.
 
         A live property, not a verdict stamped at startup: a watch runs for
         hours and permissions get fixed while it is running, so a file leaves
@@ -354,7 +363,7 @@ class Watcher:
         and yields no events is the ordinary case on every log all day, since
         most records in a session file are not events.
         """
-        return sorted(self._unreadable)
+        return sorted(self._unreadable.items())
 
     def found(self) -> int:
         """How many session logs exist at all, before any filter.

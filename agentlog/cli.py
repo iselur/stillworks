@@ -49,8 +49,8 @@ from .render import (
     render_markdown,
     render_show,
     render_text,
-    render_unusable,
 )
+from .unusable import ALL, note_about
 from .html import render_html
 from .window import Unparseable, Window
 from .when import HOW_TO_SPELL_IT
@@ -391,12 +391,17 @@ def _run(argv=None) -> int:
 
 
 def _note_unusable(unusable, verbose: bool, to_stderr: bool = False) -> None:
-    """Say that some log files were not counted, if any were not.
+    """Say that some session logs are missing from this, if any are.
 
     Goes to stderr under --json, where stdout is a published contract (a bare
     array of sessions) and a warning appended to it would break every reader.
+
+    `--verbose` means name every one of them, not a sample: a report is
+    re-runnable, and a reader who asked which files has asked for the list.
+    That is the only part of the sentence this tool decides -- the rest of it
+    is in `unusable.py`, which `agentwatch` prints from too.
     """
-    note = render_unusable(unusable, verbose)
+    note = note_about(unusable, ALL if verbose else 0)
     if note:
         print("\n" + note if not to_stderr else note,
               file=sys.stderr if to_stderr else sys.stdout)
