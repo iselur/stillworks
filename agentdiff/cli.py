@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import sys
+import textwrap
 
 from . import __version__
 from .git import find_repo_root, get_changes, GitError
@@ -387,17 +388,21 @@ def cmd_rules(args):
     print("Rules run by 'agentdiff review':\n")
     for sev, name, doc in RULE_DOCS:
         print(f"  {sev:<4}  {name}")
-        # Wrap doc text at ~76 chars
-        words = doc.split()
-        line = "        "
-        for word in words:
-            if line.strip() and len(line) + len(word) + 1 > 80:
-                print(line)
-                line = "        " + word
-            else:
-                line += (" " if line.strip() else "") + word
-        if line.strip():
-            print(line)
+        # A rule's description, indented under its name and kept inside 80
+        # columns.  This was ten lines of hand-rolled wrapping under a comment
+        # saying 76, which is not the number the code used.
+        #
+        # Hyphens are not break points.  The text names flags and files --
+        # `--strict`, `package-lock.json` -- and a line broken through the
+        # middle of one is a thing a reader would try to type.  Long words are
+        # not broken either, and runs of space are collapsed first; neither of
+        # those moves a line on today's text, and both are what the loop they
+        # replaced did.  test_the_rules_page_fits_the_window.py holds all
+        # three, and says which of them today's text can prove.
+        print(textwrap.fill(" ".join(doc.split()), width=80,
+                            initial_indent="        ",
+                            subsequent_indent="        ",
+                            break_long_words=False, break_on_hyphens=False))
         print()
     print("Note: LOW findings only affect the exit code under --strict.")
     return 0
