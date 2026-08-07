@@ -13,6 +13,7 @@ An event is a small dict:
 
     at       datetime | None  — when it happened
     kind     str              — 'turn' | 'cmd' | 'write' | 'read' | 'error'
+                                | 'compact'
     text     str              — the command, the path, or the failed call
     session  str              — session id (short form of the filename)
     source   str              — 'claude' | 'codex'
@@ -42,7 +43,7 @@ from .transcript import (
 
 # Reads are excluded from the default view: an agent reads far more than it
 # writes, and a stream that is 90% reads is a stream nobody watches.
-KINDS = ("turn", "cmd", "write", "read", "error")
+KINDS = ("turn", "cmd", "write", "read", "error", "compact")
 
 # How close together two reports of the same file have to be to be one write.
 _WRITE_ECHO = timedelta(seconds=30)
@@ -223,6 +224,42 @@ def events_from_line(raw: str, tracker: Tracker) -> List[Dict]:
         return []
 
 
+def compaction_text(metadata) -> str:
+    """What one compaction cost, or just the word when the log will not say.
+
+    A compaction is the agent stopping to summarise itself, and from outside it
+    looks like nothing at all: the feed goes quiet for a minute or two and then
+    picks up again, and the reader is left wondering whether it is stuck.  It
+    is not stuck, and this is the line that says so.
+
+    The loss is ``pre - post`` — this compaction's own.  The record also
+    carries ``cumulativeDroppedTokens``, which is a running total, so a
+    session's third compaction would report the first two over again; agentlog
+    does the same subtraction for the same reason, and the two tools reading
+    one record must not print two different numbers for it.
+
+    Codex announces a compaction with no numbers in it at all, so the bare word
+    has to stand on its own.  It is the half that matters: the clock is already
+    on every line, so a reader can see how long the gap was — what they cannot
+    see is what filled it.
+    """
+    meta = metadata if isinstance(metadata, dict) else {}
+    pre, post = meta.get("preTokens"), meta.get("postTokens")
+    numbers = [n for n in (pre, post)
+               if isinstance(n, (int, float)) and not isinstance(n, bool)]
+    if len(numbers) < 2:
+        # A count invented from a record that did not carry one is worse than
+        # no count, because the number is the only part nobody can check.
+        return "compacted"
+    dropped = max(0, int(pre) - int(post))
+    # ASCII, deliberately.  Every other line's text is a command or a path,
+    # which arrives as whatever it arrives as; this one is written here, and a
+    # terminal that cannot carry an em dash is exactly the terminal
+    # ``ASCII_MARKS`` exists for.  `compacted ? 99,593 tokens dropped` reads as
+    # a bug.  The comma is the one agentlog already puts before this number.
+    return "compacted, {:,} tokens dropped".format(dropped)
+
+
 # ---------------------------------------------------------------------------
 # Claude Code
 # ---------------------------------------------------------------------------
@@ -294,6 +331,10 @@ def _claude_events(obj: Dict, tr: Tracker) -> List[Dict]:
             elif name:
                 tr.remember(call_id, name)
 
+    elif kind == "system" and obj.get("subtype") == "compact_boundary":
+        out.append(tr._event(at, "compact",
+                             compaction_text(obj.get("compactMetadata"))))
+
     return out
 
 
@@ -329,6 +370,9 @@ def _codex_events(obj: Dict, tr: Tracker) -> List[Dict]:
     elif kind == "event_msg":
         if ptype == "user_message":
             out.append(tr._event(at, "turn", ""))
+        elif ptype == "context_compacted":
+            # The whole record: a type and a timestamp.  Nothing to subtract.
+            out.append(tr._event(at, "compact", compaction_text(None)))
         elif ptype == "patch_apply_end":
             out.extend(_codex_patch_result(payload, tr, at))
         elif ptype == "mcp_tool_call_end":

@@ -33,6 +33,7 @@ MARKS = {
     "read": "·",    # middle dot
     "error": "✗",   # ballot X
     "turn": "»",    # right guillemet
+    "compact": "≡",  # identical to — three lines pressed into one
 }
 
 ASCII_MARKS = {
@@ -41,6 +42,7 @@ ASCII_MARKS = {
     "read": ".",
     "error": "!",
     "turn": ">",
+    "compact": "=",
 }
 
 _COLORS = {
@@ -49,6 +51,7 @@ _COLORS = {
     "read": "\033[90m",     # grey
     "error": "\033[31m",    # red
     "turn": "\033[35m",     # magenta
+    "compact": "\033[33m",  # yellow
 }
 _DIM = "\033[90m"
 _RESET = "\033[0m"

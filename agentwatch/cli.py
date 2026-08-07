@@ -32,7 +32,7 @@ from .project import HOW_IT_MATCHES
 from .unusable import note_about
 from .when import HOW_TO_SPELL_IT, parse_moment
 
-DEFAULT_KINDS = ("cmd", "write", "error", "turn")
+DEFAULT_KINDS = ("cmd", "write", "error", "turn", "compact")
 
 
 def parse_kinds(raw: str) -> Tuple[str, ...]:
