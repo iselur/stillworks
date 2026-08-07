@@ -224,6 +224,16 @@ def what_excludes(name: str, rel_path: str, default_excludes: frozenset,
                   patterns: List[str]) -> Optional[str]:
     """Why this path is left out, in words, or None if it is not left out.
 
+    This is the only function that decides.  There used to be a second one
+    next to it, `is_excluded`, answering yes-or-no over the same rules on the
+    grounds that the walk runs per file and does not always need the sentence.
+    It saved 0.17us per excluded entry -- a tenth of the `os.lstat` the walk
+    does anyway -- and cost the one thing worth having here, which is that the
+    file left out and the reason it was left out cannot come from two places
+    and disagree.  A snapshot that quietly contains less than the project is
+    the failure this tool exists to prevent, and "skipped it but cannot say
+    why" is that failure with the evidence missing too.
+
     The reason names the line that did it and the file to find it in, because
     that is the only form of this sentence a person can act on.  The pattern is
     printed the way `terminal` prints anything that came off disk: it is a line
@@ -237,20 +247,6 @@ def what_excludes(name: str, rel_path: str, default_excludes: frozenset,
             return 'excluded by {} in {}'.format(
                 quoted(pat), getattr(pat, 'source', 'an ignore file'))
     return None
-
-
-def is_excluded(name: str, rel_path: str, default_excludes: frozenset, patterns: List[str]) -> bool:
-    """True if this file/dir should be skipped.
-
-    The fast half of `what_excludes`: this one runs per file, so it answers yes
-    or no without building the sentence explaining it.
-    """
-    if name in default_excludes:
-        return True
-    for pat in patterns:
-        if _matches_pattern(rel_path, pat):
-            return True
-    return False
 
 
 # ---------------------------------------------------------------------------
@@ -301,16 +297,17 @@ def scan_tree(
     # Lower sorts better.  Nothing is in the mailbox yet, so anything beats it.
     best = [(True, True)]
 
-    def note_excluded(rel_path: str, name: str, is_dir: bool) -> None:
+    def note_excluded(rel_path: str, name: str, is_dir: bool,
+                      reason: str) -> None:
+        # The reason comes in rather than being looked up again.  Asking twice
+        # meant the answer that pruned the directory and the answer that
+        # explained it were two separate reads of the rules, and the second one
+        # returning None -- a thing this function used to have a branch for --
+        # is an entry dropped from the tree with nothing said about it.
         if example_excluded is None or name == STORE_DIR_NAME:
             return
         rank = (name in IGNORE_FILES, is_dir)
         if example_excluded and rank >= best[0]:
-            return
-        # Only now, because this builds a sentence and the caller asking for an
-        # example is not asking for one per ignored file in the tree.
-        reason = what_excludes(name, rel_path, default_excludes, patterns)
-        if reason is None:
             return
         example_excluded[:] = [(rel_path, reason)]
         best[0] = rank
@@ -336,8 +333,9 @@ def scan_tree(
         pruned = []
         for d in dirnames:
             rel_d = '{}/{}'.format(rel_dir, d) if rel_dir else d
-            if is_excluded(d, rel_d, default_excludes, patterns):
-                note_excluded(rel_d, d, True)
+            why = what_excludes(d, rel_d, default_excludes, patterns)
+            if why is not None:
+                note_excluded(rel_d, d, True, why)
             else:
                 pruned.append(d)
         dirnames[:] = pruned
@@ -348,8 +346,9 @@ def scan_tree(
             rel_path = '{}/{}'.format(rel_dir, fname) if rel_dir else fname
 
             # Check exclusion for the file itself
-            if is_excluded(fname, rel_path, default_excludes, patterns):
-                note_excluded(rel_path, fname, False)
+            why = what_excludes(fname, rel_path, default_excludes, patterns)
+            if why is not None:
+                note_excluded(rel_path, fname, False, why)
                 continue
 
             try:
