@@ -24,6 +24,7 @@ import sys
 from . import __version__
 from . import store as _store
 from .shell import run_as_a_command
+from .where import add_project_flag
 # What a terminal obeys rather than shows is a fact about terminals rather than
 # about a snapshot store, so it does not come through `store`: `terminal.py` is
 # the same file in the four tools that print, and which of its answers a
@@ -433,17 +434,12 @@ def build_parser() -> argparse.ArgumentParser:
         action='version',
         version='unedit {}'.format(__version__),
     )
-    # Two spellings of one flag.  `--project DIR` is what the rest of this
-    # family calls "that directory over there", and these five install together
-    # under one `pip install`, so a flag learned in one of them should mean the
-    # same thing in the next.  `--dir` is the older name and keeps working.
-    p.add_argument(
-        '--dir', '--project',
-        metavar='DIR',
-        dest='dir',
-        default='.',
-        help='project root to operate on (default: current directory)',
-    )
+    # Two spellings of one flag, worded in where.py so all three commands
+    # that take a directory word it the same way.  `--dir` is the older name
+    # and keeps working; it goes second because argparse puts the first name
+    # in the usage line, and that line is the whole of the help most people
+    # read.
+    add_project_flag(p, '.', '--dir', dest='dir')
 
     # The same pair again, accepted after the subcommand.  `unedit save --dir
     # build` used to be "unrecognized arguments", which reads as a flag that
@@ -451,10 +447,7 @@ def build_parser() -> argparse.ArgumentParser:
     # keeps an unnamed flag here from overwriting one given before the
     # subcommand with the default.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument('--dir', '--project', metavar='DIR', dest='dir',
-                        default=argparse.SUPPRESS,
-                        help='project root to operate on '
-                             '(default: current directory)')
+    add_project_flag(common, argparse.SUPPRESS, '--dir', dest='dir')
 
     sub = p.add_subparsers(dest='command', metavar='COMMAND')
     sub.required = True

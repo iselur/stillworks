@@ -18,6 +18,7 @@ import sys
 
 from . import __version__, core
 from .shell import run_as_a_command
+from .where import add_project_flag
 # What a terminal obeys rather than shows is a fact about terminals rather
 # than about a behaviour lock: it lives in `terminal.py`, which is the same
 # file in the five packages that print.  Every value on a `check` row comes
@@ -269,13 +270,11 @@ def build_parser():
                     "changes later.")
     p.add_argument("--version", action="version",
                    version="stillworks {}".format(__version__))
-    p.add_argument("--project", default=".", help="project directory "
-                   "(default: current directory)")
+    add_project_flag(p, ".")
     # Also accepted after the subcommand (`stillworks check --project X`);
     # SUPPRESS keeps the sub-level flag from clobbering the global default.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--project", default=argparse.SUPPRESS,
-                        help=argparse.SUPPRESS)
+    add_project_flag(common, argparse.SUPPRESS)
     sub = p.add_subparsers(dest="command")
 
     sp = sub.add_parser("lock", parents=[common],

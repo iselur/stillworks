@@ -19,6 +19,7 @@ from . import __version__
 from .git import find_repo_root, get_changes, GitError
 from .rules import RULE_DOCS, SEVERITY, gating_findings, run_rules
 from .shell import run_as_a_command
+from .where import add_project_flag
 # What a scope file may hold, and where it is -- one file format read and
 # written in one place, because the reader and the writer disagreeing about it
 # is a scope that saves cleanly and reviews as no scope at all.
@@ -405,15 +406,13 @@ def _build_parser():
         description="See what the agent actually changed — before you merge.",
     )
     p.add_argument("--version", action="version", version=f"agentdiff {__version__}")
-    p.add_argument("--project", default=".", metavar="DIR",
-                   help="project directory (default: current directory)")
+    add_project_flag(p, ".")
 
     # Accepted on either side of the subcommand.  SUPPRESS matters: without it
     # the subparser's own default would overwrite a --project given before the
     # subcommand with None, and the flag would silently do nothing there.
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--project", default=argparse.SUPPRESS, metavar="DIR",
-                        help="project directory (default: current directory)")
+    add_project_flag(common, argparse.SUPPRESS)
 
     sub = p.add_subparsers(dest="command", metavar="COMMAND")
 
