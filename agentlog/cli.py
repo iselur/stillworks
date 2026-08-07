@@ -54,17 +54,22 @@ from .render import (
 from .html import render_html
 from .window import Unparseable, Window
 from .when import HOW_TO_SPELL_IT
+from .project import HOW_IT_MATCHES, matches
 from .shell import as_typed, run_as_a_command
 
 
 def _filter_project(sessions: List[Dict], needle: str) -> List[Dict]:
-    """Keep sessions whose project name or path contains ``needle``."""
-    low = needle.lower()
+    """Keep the sessions ``needle`` asked for.
+
+    A session knows its project by two names -- the directory it ran in and the
+    label shown in the digest -- and either one is worth matching, so both are
+    handed over and ``matches`` decides.  Which is also how ``agentwatch``
+    decides, now that there is one of these rules rather than two.
+    """
     return [
         s
         for s in sessions
-        if low in (s.get("project_name") or "").lower()
-        or low in (s.get("project") or "").lower()
+        if matches(needle, s.get("project_name"), s.get("project"))
     ]
 
 
@@ -165,7 +170,7 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--project",
         metavar="NAME",
-        help="only include projects whose name or path contains NAME",
+        help=HOW_IT_MATCHES,
     )
     p.add_argument("--all", action="store_true", help="list: show all sessions (no row limit)")
     p.add_argument("--limit", type=int, default=50, metavar="N", help="list: max rows to show (default 50)")

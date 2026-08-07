@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 
 from .events import Tracker, events_from_line
 from .transcript import decode_claude_project, session_id_for
+from .project import matches
 
 CLAUDE_SUBDIR = os.path.join(".claude", "projects")
 CODEX_SUBDIR = os.path.join(".codex", "sessions")
@@ -132,14 +133,14 @@ class Watcher:
         self.sources = sources
         self.since = since
         self.stale_s = stale_s
-        self.project = (project or "").lower()
+        self.project = project or ""
         self._clock = clock or (lambda: datetime.now(timezone.utc).timestamp())
         self._files: Dict[str, _FileState] = {}
         self._unreadable: set = set()
         self._first_scan = True
         self._found = 0
         self._last_scan = 0.0
-        self._project_names: Dict[str, str] = {}
+        self._guessed_paths: Dict[str, str] = {}
         # Record uuids already shown.  Deliberately not bounded: it holds one
         # short id per record actually read, which is a fraction of the bytes
         # the watcher has already read to get them, and evicting the oldest
@@ -183,7 +184,10 @@ class Watcher:
         if guessed and source == "claude":
             project = decode_claude_project(path)
         name = _label(project)
-        if self.project and self.project not in name.lower():
+        # The path as well as the name: somebody who asked for
+        # `/home/you/relay` named this project exactly, and matching only the
+        # last component is how that ask found nothing at all.
+        if not matches(self.project, name, project):
             if guessed:
                 # Excluded on a guess.  Follow it anyway and decide again in
                 # ``poll`` once the log says what it really is — refusing here
@@ -199,7 +203,7 @@ class Watcher:
         # the guess would settle the question for good — it fills ``project``
         # once and never overwrites it — and the real cwd, further down the
         # file, would arrive to find the slot already taken.  The guess lives in
-        # ``_project_names`` instead, where it is a fallback rather than an
+        # ``_guessed_paths`` instead, where it is a fallback rather than an
         # answer.
         tracker = Tracker(session_id_for(path, source), source,
                           "" if guessed else project)
@@ -209,7 +213,11 @@ class Watcher:
         start_at_end = self._first_scan and self.since is None
         self._files[path] = _FileState(
             st.st_size if start_at_end else 0, tracker, st.st_ino)
-        self._project_names[path] = name
+        # The whole path, not the label: the label is one `_label` away from it
+        # and the path is not recoverable from the label, so keeping the longer
+        # one is what lets a filter written as a path still match a log we only
+        # ever guessed at.
+        self._guessed_paths[path] = project
 
     def _scan(self) -> None:
         found = 0
@@ -290,9 +298,17 @@ class Watcher:
         # read; backfill it so early events are not labelled blank.  It is also
         # preferred over the name settled at adoption, because that one may have
         # been decoded from the directory — see ``decode_claude_project``.
-        name = _label(state.tracker.project) or self._project_names.get(path, "")
+        full = state.tracker.project or self._guessed_paths.get(path, "")
+        name = _label(full)
         for event in out:
             event["project"] = name
+        if not matches(self.project, name, full):
+            # Asked again here rather than at adoption, because a log taken on
+            # a guessed name may since have said which project it really is --
+            # in either direction.  It is asked *here*, in the one place that
+            # has just worked out which name won, so the resolved path is on
+            # hand: the events themselves carry only the label.
+            return []
         return out
 
     def poll(self) -> List[Dict]:
@@ -306,12 +322,6 @@ class Watcher:
             if state.offset < 0:      # filtered out by --project
                 continue
             events.extend(self._read_new(path, state))
-        if self.project:
-            # Checked again here, on the resolved name, because a log adopted on
-            # a guessed one may since have said what project it really is — in
-            # either direction.
-            events = [e for e in events
-                      if self.project in (e["project"] or "").lower()]
         if self.since is not None:
             events = [e for e in events
                       if e["at"] is None or e["at"] >= self.since]

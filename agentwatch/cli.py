@@ -27,6 +27,7 @@ from .events import KINDS
 from .follow import DEFAULT_STALE_S, Watcher
 from .printer import Printer
 from .shell import as_typed, run_as_a_command
+from .project import HOW_IT_MATCHES
 from .when import HOW_TO_SPELL_IT, parse_moment
 
 DEFAULT_KINDS = ("cmd", "write", "error", "turn")
@@ -60,7 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--once", action="store_true",
                    help="print what is there and exit, instead of following")
     p.add_argument("--project", metavar="NAME", default="",
-                   help="only projects whose name contains NAME")
+                   # The sentence is in `project.py`, beside the rule it
+                   # describes, so help that offers a path cannot outlive a
+                   # matcher that takes one.
+                   help=HOW_IT_MATCHES)
     p.add_argument("--only", metavar="KINDS",
                    help="comma-separated: {}".format(",".join(KINDS)))
     p.add_argument("--reads", action="store_true",
