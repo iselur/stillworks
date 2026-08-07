@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Tuple
 
 from . import clock
 from .clock import how_long, when
@@ -28,55 +28,120 @@ from .which_file import as_shown
 # measured.  See tests/test_printing_what_an_agent_wrote.py.
 
 
-def _clip(text: str, width: int) -> str:
-    """The longest prefix that fits in ``width`` cells."""
+#: The one mark that says text was cut.  There were three spellings of this in
+#: this file -- ``...`` in front, ``...`` behind, and ``…`` -- so the same
+#: event looked like three different ones depending on which row you read.
+_CUT = "…"
+
+
+def _fitting(text: str, cells: int, from_the_end: bool) -> str:
+    """The longest run of `text` that fits in `cells`, from one end or other."""
+    order = reversed(text) if from_the_end else text
+    kept, used = [], 0
+    for char in order:
+        width = display_width(char)
+        if used + width > cells:
+            break
+        kept.append(char)
+        used += width
+    return "".join(reversed(kept)) if from_the_end else "".join(kept)
+
+
+def shortened(text: str, width: int, keep_the_end: bool = False) -> str:
+    """`text` cut to fit `width` cells, saying so where it was cut.
+
+    Three separate things a caller would otherwise have to get right, and this
+    module got two of them wrong in three places out of four:
+
+    *In cells, not characters.*  `display_width` is imported at the top of this
+    file precisely because an eye reads cells, and then four helpers cut with
+    `len` anyway.  A failed command written in Japanese was cut to 56
+    characters, drawn in 121 cells, and ran off the side of an 80-cell digest
+    -- the row directly under the one that carries a comment about having
+    fixed this exact fault for *its* row.
+
+    *The mark is inside the budget.*  A width is a promise about the row it
+    goes in, so a mark added after the cut breaks the promise by the width of
+    the mark, which is how a row that fits becomes a row that wraps.
+
+    *One mark, one direction per kind of thing.*  A path is identified by its
+    end, so ``keep_the_end`` keeps the basename and marks the front; a command
+    is identified by its start.  One caller cut a command to its last 80
+    characters and then to the first 72 of those, so the reader was shown the
+    middle of the command and no part of either end.
+
+    Not for `_one_row`, which is a different job: it bounds a detail view that
+    has no column after it, and says how much it is not showing rather than
+    fitting anything.
+    """
     if display_width(text) <= width:
         return text
-    out, used = [], 0
-    for char in text:
-        cells = display_width(char)     # one character's own width, in cells
-        if used + cells > width:
-            break
-        out.append(char)
-        used += cells
-    return "".join(out)
+    room = width - display_width(_CUT)
+    if room <= 0:
+        # No room to say anything but "there was more" -- and if there is not
+        # even room for that, the caller asked for a column no text fits in.
+        return _CUT if width >= display_width(_CUT) else ""
+    if keep_the_end:
+        return _CUT + _fitting(text, room, from_the_end=True)
+    return _fitting(text, room, from_the_end=False) + _CUT
 
 
-def _truncate(items: List[str], limit: int = 6, width: int = 60) -> List[str]:
-    """Return up to ``limit`` items, each truncated to ``width`` chars."""
-    out = []
-    for item in items[:limit]:
-        if len(item) > width:
-            item = "..." + item[-(width - 3):]
-        out.append(item)
+def _first_few(items: List[str], limit: int = 6, indent: str = "  ") -> List[str]:
+    """Up to `limit` items, and a line saying how many were left out.
+
+    How many items to show and how long each may be are two questions, and
+    answering both here meant answering the second one for callers that wanted
+    different things -- the tail of a path, the head of a command.  Each caller
+    now cuts its own with `shortened`, which is the only thing that knows how.
+
+    The "left out" line was written out by hand at four places in this file and
+    spelled two different ways, so the plain view said ``... and 5 more`` and
+    the digest said ``… and 2 more`` about the same kind of thing in the same
+    run.  `indent` is the only part that actually varies: inside a markdown
+    fence the line sits flush, everywhere else it sits under its list.
+    """
+    out = list(items[:limit])
     if len(items) > limit:
-        out.append(f"  ... and {len(items) - limit} more")
+        out.append(f"{indent}{_CUT} and {len(items) - limit} more")
     return out
 
 
-def _cmd_headline(cmd: str, width: int = 56) -> str:
-    """First line of a command, marked when more lines follow.
+def _identifying_line(cmd: str) -> Tuple[str, bool]:
+    """The line that says which command this is, and whether more follow.
 
     Heredocs and inline scripts are several lines long; flattening them into
     one run-on line is unreadable, and the first line is the identifying part.
+
+    Not fitted to anything, because two rows in the same digest do not have the
+    same room -- the one carrying a repeat count has less -- and because the
+    digest collapses repeats on this.  Collapsing on the *fitted* text would
+    make two commands that differ only past the cut read as one.
     """
     lines = [ln for ln in cmd.splitlines() if ln.strip()]
-    if not lines:
+    return (lines[0].strip(), len(lines) > 1) if lines else ("", False)
+
+
+def _fitted_headline(line: str, more_below: bool, width: int) -> str:
+    """An identifying line in `width` cells, both of its marks included.
+
+    The "and there is more of it" mark is taken out of the width before the
+    line is cut, not added after: both marks are part of what has to fit.
+    """
+    if not line:
         return ""
-    head = lines[0].strip()
-    if len(head) > width:
-        head = head[:width] + "…"
-    if len(lines) > 1:
-        head += " …"
-    return head
+    more = " " + _CUT if more_below else ""
+    return shortened(line, width - display_width(more)) + more
+
+
+def _cmd_headline(cmd: str, width: int = 56) -> str:
+    """First line of a command, marked when more lines follow, in `width`."""
+    line, more_below = _identifying_line(cmd)
+    return _fitted_headline(line, more_below, width)
 
 
 def _shorten_cmd(cmd: str, width: int = 72) -> str:
-    """Shorten a shell command for display."""
-    cmd = cmd.replace("\n", " ").strip()
-    if len(cmd) > width:
-        return cmd[:width] + "..."
-    return cmd
+    """Shorten a shell command for display, keeping the end that names it."""
+    return shortened(cmd.replace("\n", " ").strip(), width)
 
 
 def _one_row(text: str, width: int = 400) -> str:
@@ -113,8 +178,8 @@ def _one_row(text: str, width: int = 400) -> str:
     flat = " ".join(text.splitlines())
     if len(flat) <= width:
         return flat
-    return "{}… (+{:,} more characters, see --json)".format(
-        flat[:width], len(flat) - width)
+    return "{}{} (+{:,} more characters, see --json)".format(
+        flat[:width], _CUT, len(flat) - width)
 
 
 # ---------------------------------------------------------------------------
@@ -364,7 +429,7 @@ def render_digest(
         if not stats:
             stats.append("no edits or commands recorded")
         lines.append(
-            f"  {_pad(_clip(g['name'], name_w), name_w)}  "
+            f"  {_pad(shortened(g['name'], name_w), name_w)}  "
             f"{clock.duration(g['seconds']).rjust(dur_w)}   " + " · ".join(stats)
         )
 
@@ -381,18 +446,31 @@ def render_digest(
                 as_shown(f, g["path"], each) for f in files))
         # Collapse on the headline: three heredocs that differ only below
         # their first line should read as one repeated failure, not three.
-        by_head: Dict[str, int] = {}
+        by_head: Dict[Tuple[str, bool], int] = {}
         for cmd, n in g["top_failed"]:
-            head = _cmd_headline(cmd)
+            head = _identifying_line(cmd)
             by_head[head] = by_head.get(head, 0) + n
         ranked = sorted(by_head.items(), key=lambda kv: (-kv[1], kv[0]))
-        for i, (head, n) in enumerate(ranked[:3]):
+        for i, ((head, more_below), n) in enumerate(ranked[:3]):
             label = "      failed   " if i == 0 else "               "
-            lines.append(label + head + (f"  ({n}x)" if n > 1 else ""))
+            # Held to the digest's width like the row above it.  This row was
+            # the one that was not, so a command with wide characters in it
+            # ran off the side of the very layout the row above is measured
+            # against -- and the count is part of the row, so it comes out of
+            # the budget rather than being added once the cutting is over.
+            #
+            # Cut once, here, at the room this row has.  It used to be cut to a
+            # fixed 56 cells first, which is narrower than the row ever is, so
+            # the row's own width was decorative and widening the digest moved
+            # nothing.
+            times = f"  ({n}x)" if n > 1 else ""
+            room = _DIGEST_WIDTH - display_width(label) - display_width(times)
+            lines.append(label + _fitted_headline(head, more_below, room)
+                         + times)
 
     if len(groups) > max_projects:
         rest = len(groups) - max_projects
-        lines.append(f"  … and {rest} more project{'s' if rest != 1 else ''}")
+        lines.append(f"  {_CUT} and {rest} more project{'s' if rest != 1 else ''}")
 
     lines.append("")
 
@@ -472,13 +550,18 @@ def _render_session_text(
     if files_all:
         label = "files"
         lines.append(f"    {label}:")
-        for f in _truncate(files_all):
+        for f in _first_few(files_all):
             tag = " (r)" if f in s["files_read"] and f not in s["files_written"] else ""
-            lines.append(f"      {f}{tag}")
+            # A path is identified by its end, so that is the end kept.
+            lines.append(f"      {shortened(f, 60, keep_the_end=True)}{tag}")
 
     if s["commands"]:
         lines.append(f"    commands ({len(s['commands'])}):")
-        for cmd in _truncate(s["commands"], limit=5, width=80):
+        for cmd in _first_few(s["commands"], limit=5):
+            # Cut once, at the width this row has.  It used to be cut twice in
+            # opposite directions -- to the last 80 characters and then to the
+            # first 72 of those -- so what was printed was the middle of the
+            # command and neither end of it.
             lines.append(f"      $ {_shorten_cmd(cmd)}")
 
     tokens = _fmt_tokens(s)
@@ -551,7 +634,7 @@ def render_list(sessions: List[Dict]) -> str:
     shorts = unique_short_ids(sessions)
     for s in sessions:
         sid = shorts.get(s["id"]) or "?"
-        project = _clip(s["project_name"] or "?", 24)
+        project = shortened(s["project_name"] or "?", 24)
         # Started, not ran-from-to: the WHEN column is sixteen characters and a
         # range does not go in one.  And DUR is eight, so this is the one view
         # that takes the bare number without the phrase that explains it.
@@ -703,21 +786,20 @@ def _markdown_session(s: Dict, shorts: Dict[str, str]) -> List[str]:
     if files_all:
         lines.append(f"**Files** ({len(files_all)}):")
         lines.append("```")
-        for f in files_all[:20]:
-            tag = " (read only)" if f in s["files_read"] and f not in s["files_written"] else ""
-            lines.append(f"{f}{tag}")
-        if len(files_all) > 20:
-            lines.append(f"... and {len(files_all) - 20} more")
+        # Flush against the fence rather than indented under a list, but the
+        # same sentence in the same words as every other view.
+        lines.extend(_first_few(
+            [f + (" (read only)"
+                  if f in s["files_read"] and f not in s["files_written"] else "")
+             for f in files_all], limit=20, indent=""))
         lines.append("```")
         lines.append("")
 
     if s["commands"]:
         lines.append(f"**Commands** ({len(s['commands'])}):")
         lines.append("```sh")
-        for cmd in s["commands"][:20]:
-            lines.append(f"$ {_shorten_cmd(cmd)}")
-        if len(s["commands"]) > 20:
-            lines.append(f"... and {len(s['commands']) - 20} more")
+        lines.extend(_first_few([f"$ {_shorten_cmd(c)}" for c in s["commands"]],
+                                limit=20, indent=""))
         lines.append("```")
         lines.append("")
 
