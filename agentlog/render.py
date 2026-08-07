@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 
@@ -12,6 +11,7 @@ from .clock import how_long, when
 from .parser import active_spans
 from .terminal import block as safe_for_terminal
 from .terminal import display_width, pad as _pad
+from .which_file import as_shown
 
 
 # ---------------------------------------------------------------------------
@@ -272,18 +272,6 @@ def group_by_project(sessions: List[Dict]) -> List[Dict]:
     return out
 
 
-def _relative_path(path: str, root: str, width: int = 34) -> str:
-    """Show a file relative to its project, short enough to sit in a list."""
-    if root and path.startswith(root.rstrip("/") + "/"):
-        rel = path[len(root.rstrip("/")) + 1:]
-    else:
-        rel = os.path.basename(path) or path
-    if len(rel) > width:
-        parts = rel.split("/")
-        rel = ".../" + "/".join(parts[-2:]) if len(parts) > 2 else parts[-1]
-    return rel
-
-
 def _busiest_hour(sessions: List[Dict]) -> Optional[str]:
     """The local hour with the most recorded activity, as 'HH:00–HH:00'.
 
@@ -333,6 +321,15 @@ def _period_phrase(period_label: str) -> str:
     return phrase
 
 
+#: The digest is a fixed layout, written for the narrowest terminal anybody
+#: still has.  Every column in it is a share of this, so a row that ignores it
+#: wraps on the reader's screen and breaks the shape of the whole thing.
+_DIGEST_WIDTH = 80
+
+#: The label the edited-files row hangs off, and therefore what it costs.
+_EDITED = "      edited   "
+
+
 def render_digest(
     sessions: List[Dict],
     period_label: str = "today",
@@ -372,8 +369,16 @@ def render_digest(
         )
 
         if g["top_files"]:
-            names = [_relative_path(f, g["path"]) for f in g["top_files"][:3]]
-            lines.append("      edited   " + ", ".join(names))
+            files = g["top_files"][:3]
+            # Share the row out between them.  The names used to be allowed 34
+            # cells each and then not held to it, so three long ones ran off
+            # the edge of the terminal -- the one row in the digest that was
+            # not measured, sitting directly under the one that is.  One file
+            # gets the whole row; three split it.
+            each = ((_DIGEST_WIDTH - display_width(_EDITED)
+                     - 2 * (len(files) - 1)) // len(files))
+            lines.append(_EDITED + ", ".join(
+                as_shown(f, g["path"], each) for f in files))
         # Collapse on the headline: three heredocs that differ only below
         # their first line should read as one repeated failure, not three.
         by_head: Dict[str, int] = {}

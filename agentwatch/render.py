@@ -17,6 +17,7 @@ from typing import Dict, Optional
 # are facts about terminals rather than about this layout: they live in
 # `terminal.py`, which is the same file in the four tools that print.
 from .terminal import display_width, one_line, pad as _pad  # noqa: F401
+from .which_file import as_shown
 
 PROJECT_WIDTH = 12
 MIN_TEXT = 20
@@ -187,21 +188,6 @@ def _fit(text: str, width: int) -> str:
     return "".join(out) + "…"
 
 
-def _shorten_path(path: str, project: str) -> str:
-    """A written file, said the way the person watching would say it."""
-    if not path:
-        return ""
-    if project:
-        marker = os.sep + project + os.sep
-        idx = path.find(marker)
-        if idx >= 0:
-            return path[idx + len(marker):]
-    home = os.path.expanduser("~")
-    if home and home != os.sep and path.startswith(home + os.sep):
-        return "~" + path[len(home):]
-    return path
-
-
 def format_event(event: Dict, marks: Dict[str, str], color: bool = False,
                  width: int = 100) -> str:
     """The whole line for one event."""
@@ -212,14 +198,19 @@ def format_event(event: Dict, marks: Dict[str, str], color: bool = False,
     # which costs the fixed layout far more than a truncated name does.
     room = max(4, min(PROJECT_WIDTH, width - _FIXED - MIN_TEXT))
     project = _pad(_fit(event.get("project") or "-", room), room)
+    for_text = max(MIN_TEXT, width - _FIXED - room)
     text = event.get("text") or ""
     if kind == "write":
-        text = _shorten_path(text, (event.get("project") or ""))
+        # Given the room rather than left to `_fit`, which cuts the right-hand
+        # end off a line -- the end of a path being the one part that says
+        # which file it was.  `as_shown` takes the directories off the front
+        # instead, and `agentlog` prints the same file the same way.
+        text = as_shown(text, event.get("project") or "", for_text)
     elif kind == "turn":
         text = "you"
     elif kind == "error" and not text:
         text = "(a call failed)"
-    text = _fit(text, max(MIN_TEXT, width - _FIXED - room))
+    text = _fit(text, for_text)
     stamp = _clock(event)
     if color:
         return "{}{}{}  {}  {}{}{} {}".format(
