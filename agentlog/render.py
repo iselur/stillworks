@@ -264,6 +264,36 @@ def active_seconds(sessions: List[Dict]) -> float:
     return total
 
 
+def what_it_did(files: int, commands: int, errors: int) -> List[str]:
+    """What a run did, as phrases for a view to join with its own separator.
+
+    `176 files edited · 874 commands · 75 errors`.  A count of zero is left out
+    rather than printed: a project with no errors should not have to say so.
+
+    This is one sentence, and it was typed out by hand in four views — the
+    terminal digest, the markdown document, the HTML digest and the summary
+    line — which is three chances to spell it differently, and two of them had
+    been taken.  The markdown document said `1 commands` and `1 errors`
+    because its plural guard had never been written; and only the summary line
+    said what the files *were*, so everywhere else a reader was told `176
+    files` and left to guess whether that meant read or written.  It means
+    written.
+
+    Phrases rather than a finished string because the views do not all want
+    the same thing around them: the markdown document puts the time first, and
+    the summary line puts sessions, time and projects first and compactions
+    last.  Joining is the caller's business; the words are not.
+    """
+    out = []
+    if files:
+        out.append(f"{files} file{'' if files == 1 else 's'} edited")
+    if commands:
+        out.append(f"{commands} command{'' if commands == 1 else 's'}")
+    if errors:
+        out.append(f"{errors} error{'' if errors == 1 else 's'}")
+    return out
+
+
 def summary_line(sessions: List[Dict]) -> str:
     """Return a one-line digest summary, e.g. '4 sessions · 3h 12m · 3 projects'."""
     if not sessions:
@@ -281,17 +311,29 @@ def summary_line(sessions: List[Dict]) -> str:
     ]
     if projects:
         parts.append(f"{projects} project{'s' if projects != 1 else ''}")
-    if files_edited:
-        parts.append(f"{files_edited} file{'s' if files_edited != 1 else ''} edited")
-    if cmds:
-        parts.append(f"{cmds} command{'s' if cmds != 1 else ''}")
-    if errors:
-        parts.append(f"{errors} error{'s' if errors != 1 else ''}")
+    parts.extend(what_it_did(files_edited, cmds, errors))
     compactions = sum(len(s.get("compactions") or []) for s in sessions)
     if compactions:
         parts.append(f"{compactions} compaction{'s' if compactions != 1 else ''}")
 
     return " · ".join(parts)
+
+
+def what_compaction_cost(compactions: List[Dict]) -> str:
+    """The price of compacting, in time and in thrown-away history.
+
+    `6h 43m spent on it, 16,516,640 tokens dropped`.
+
+    The time used to be reported as `6h 43m spent`, which does not say spent on
+    what, and sits in a digest whose first line is `8h 44m active` — so the one
+    reading it most naturally is the wrong one, that six of the day's eight
+    hours are unaccounted for.  They are accounted for: the agent spent them
+    summarising itself.  `on it` points back at the word the line opens
+    with, which is the only thing it can be pointing at.
+    """
+    spent = clock.duration(sum(c.get("duration_s", 0.0) for c in compactions))
+    dropped = sum(c.get("dropped", 0) for c in compactions)
+    return f"{spent} spent on it, {dropped:,} tokens dropped"
 
 
 def compaction_note(sessions: List[Dict]) -> str:
@@ -306,11 +348,9 @@ def compaction_note(sessions: List[Dict]) -> str:
     if not compactions:
         return ""
     in_sessions = sum(1 for s in sessions if s.get("compactions"))
-    spent = clock.duration(sum(c.get("duration_s", 0.0) for c in compactions))
-    dropped = sum(c.get("dropped", 0) for c in compactions)
     return (f"compacted {len(compactions)}x in {in_sessions} "
             f"session{'s' if in_sessions != 1 else ''}"
-            f" · {spent} spent, {dropped:,} tokens dropped")
+            f" · {what_compaction_cost(compactions)}")
 
 
 # ---------------------------------------------------------------------------
@@ -440,13 +480,7 @@ def render_digest(
     dur_w = max(len(clock.duration(g["seconds"])) for g in shown)
 
     for g in shown:
-        stats = []
-        if g["files"]:
-            stats.append(f"{g['files']} file{'s' if g['files'] != 1 else ''}")
-        if g["commands"]:
-            stats.append(f"{g['commands']} command{'s' if g['commands'] != 1 else ''}")
-        if g["errors"]:
-            stats.append(f"{g['errors']} error{'s' if g['errors'] != 1 else ''}")
+        stats = what_it_did(g["files"], g["commands"], g["errors"])
         if not stats:
             stats.append("no edits or commands recorded")
         lines.append(
@@ -562,7 +596,9 @@ def _render_session_text(
     if title:
         header += f'  "{title}"'
     lines.append(header)
-    lines.append(f"    {time_range}  ({duration})  {s['user_turns']} turns")
+    turns = s["user_turns"]
+    lines.append(f"    {time_range}  ({duration})  "
+                 f"{turns} turn{'' if turns == 1 else 's'}")
 
     if s["models"]:
         lines.append(f"    model: {', '.join(s['models'])}")
@@ -623,12 +659,10 @@ def _fmt_compactions(s: Dict) -> str:
     if not compactions:
         return ""
     manual = sum(1 for c in compactions if c.get("trigger") == "manual")
-    spent = clock.duration(sum(c.get("duration_s", 0.0) for c in compactions))
-    dropped = sum(c.get("dropped", 0) for c in compactions)
     how_many = f"compacted {len(compactions)}x"
     if manual:
         how_many += f" ({manual} manual)"
-    return f"{how_many} — {spent} spent, {dropped:,} tokens dropped"
+    return f"{how_many} — {what_compaction_cost(compactions)}"
 
 
 def _fmt_tokens(s: Dict) -> str:
@@ -762,12 +796,8 @@ def render_markdown(sessions: List[Dict]) -> str:
     # "what did it work on" before "which session ran when".
     for group in group_by_project(sessions):
         stats = [f"{clock.duration(group['seconds'])} active"]
-        if group["files"]:
-            stats.append(f"{group['files']} file{'s' if group['files'] != 1 else ''}")
-        if group["commands"]:
-            stats.append(f"{group['commands']} commands")
-        if group["errors"]:
-            stats.append(f"{group['errors']} errors")
+        stats.extend(what_it_did(
+            group["files"], group["commands"], group["errors"]))
         lines.append(f"## {group['name']}")
         lines.append("")
         lines.append(" · ".join(stats))

@@ -20,6 +20,7 @@ from .render import (
     left_out,
     unique_short_ids,
     summary_line,
+    what_it_did,
 )
 
 
@@ -322,15 +323,7 @@ def _render_card(s: Dict, shorts: Optional[Dict[str, str]] = None) -> str:
 
 def _render_project(group: Dict, shorts: Optional[Dict[str, str]] = None) -> str:
     """One project heading followed by that project's session cards."""
-    stats = []
-    if group["files"]:
-        stats.append(f"{group['files']} file{'s' if group['files'] != 1 else ''}")
-    if group["commands"]:
-        n = group["commands"]
-        stats.append(f"{n} command{'s' if n != 1 else ''}")
-    if group["errors"]:
-        n = group["errors"]
-        stats.append(f"{n} error{'s' if n != 1 else ''}")
+    stats = what_it_did(group["files"], group["commands"], group["errors"])
     n_sess = len(group["sessions"])
     stats.append(f"{n_sess} session{'s' if n_sess != 1 else ''}")
 
