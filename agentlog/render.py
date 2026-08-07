@@ -94,16 +94,37 @@ def _first_few(items: List[str], limit: int = 6, indent: str = "  ") -> List[str
     different things -- the tail of a path, the head of a command.  Each caller
     now cuts its own with `shortened`, which is the only thing that knows how.
 
-    The "left out" line was written out by hand at four places in this file and
-    spelled two different ways, so the plain view said ``... and 5 more`` and
-    the digest said ``… and 2 more`` about the same kind of thing in the same
-    run.  `indent` is the only part that actually varies: inside a markdown
-    fence the line sits flush, everywhere else it sits under its list.
+    `indent` is the only part that actually varies: inside a markdown fence the
+    line sits flush, everywhere else it sits under its list.  What it says is
+    `left_out`, which the views that are not lines of text ask for too.
     """
     out = list(items[:limit])
-    if len(items) > limit:
-        out.append(f"{indent}{_CUT} and {len(items) - limit} more")
+    tail = left_out(len(items), limit)
+    if tail:
+        out.append(indent + tail)
     return out
+
+
+def left_out(total: int, shown: int) -> str:
+    """What to say about the items a view did not show, or nothing to say.
+
+    One situation, one sentence.  This was written out by hand at four places
+    in this file and spelled two different ways, so the plain view said
+    ``... and 5 more`` where the digest said ``… and 2 more`` about the same
+    kind of thing in the same run.  Collecting them into `_first_few` fixed
+    every view made of lines and left out the one that is not — so the HTML
+    digest went on saying it the old way, and a run written to both still read
+    as two tools rather than one.
+
+    Which is why the sentence is here rather than in `_first_few`: a view that
+    wraps each item in a tag cannot use a list of indented strings, and asking
+    it to spell the sentence itself is asking for exactly this again.
+
+    Empty when nothing was left out, so a caller can ask without first working
+    out whether there is an answer.
+    """
+    missing = total - shown
+    return "{} and {} more".format(_CUT, missing) if missing > 0 else ""
 
 
 def _identifying_line(cmd: str) -> Tuple[str, bool]:

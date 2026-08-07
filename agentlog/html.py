@@ -17,6 +17,7 @@ from .render import (
     _dedup_merge,
     _shorten_cmd,
     group_by_project,
+    left_out,
     unique_short_ids,
     summary_line,
 )
@@ -297,8 +298,9 @@ def _render_card(s: Dict, shorts: Optional[Dict[str, str]] = None) -> str:
         for f in shown:
             tag_suffix = "  (read)" if f in s["files_read"] and f not in s["files_written"] else ""
             code_lines.append(_e(f) + _tag("span", _e(tag_suffix), class_="more"))
-        if len(files_all) > limit:
-            code_lines.append(_tag("span", f"... and {len(files_all) - limit} more", class_="more"))
+        tail = left_out(len(files_all), limit)
+        if tail:
+            code_lines.append(_tag("span", _e(tail), class_="more"))
         label = _tag("div", f"Files ({_e(str(len(files_all)))})", class_="section-label")
         block = _tag("div", "\n".join(code_lines), class_="code-block")
         sections += _tag("div", label + block, class_="section")
@@ -307,8 +309,9 @@ def _render_card(s: Dict, shorts: Optional[Dict[str, str]] = None) -> str:
         limit = 8
         shown = s["commands"][:limit]
         code_lines = [_e("$ " + _shorten_cmd(cmd, 100)) for cmd in shown]
-        if len(s["commands"]) > limit:
-            code_lines.append(_tag("span", f"... and {len(s['commands']) - limit} more", class_="more"))
+        tail = left_out(len(s["commands"]), limit)
+        if tail:
+            code_lines.append(_tag("span", _e(tail), class_="more"))
         label = _tag("div", f"Commands ({_e(str(len(s['commands'])))})", class_="section-label")
         block = _tag("div", "\n".join(code_lines), class_="code-block")
         sections += _tag("div", label + block, class_="section")
