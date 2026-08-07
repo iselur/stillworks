@@ -32,7 +32,32 @@ from .where import add_project_flag
 from .terminal import block, one_line, pad, row
 
 
-def _err(msg: str, code: int = 2) -> int:
+def _failed(args, msg: str, code: int = 2) -> int:
+    """Say why unedit stopped, in whichever way the caller asked to be told.
+
+    A script that passes `--json` reads stdout and parses it.  Every failure
+    here used to write a sentence to stderr and nothing at all to stdout, so
+    that script got an empty string and `json.loads` raised -- the one place a
+    program most needs to be told what happened is the one place it was told in
+    a shape it cannot read, and the traceback it gets names our output, not our
+    error.
+
+    The error document is an object with `error` in it, on every command,
+    including the two whose success output is a list.  Which of the two you are
+    holding is what the exit code is for, and it is never 0 here.
+
+    The word in front is `unedit`, not `error`.  Five commands install together
+    under one `pip install`, and in a build log with several of them running, a
+    line beginning `error:` does not say who is talking.
+
+    `args.json` plainly, and not `getattr(args, 'json', False)`: every one of the
+    seven subcommands declares the flag, so there is no namespace that arrives
+    here without it and a default here would be a branch no test can reach.  The
+    fact it leans on is pinned by `test_every_command_takes_the_flag_this_reads`.
+    """
+    if args.json:
+        _print_json({'error': msg})
+        return code
     print('unedit: {}'.format(msg), file=sys.stderr)
     return code
 
@@ -71,9 +96,9 @@ def cmd_save(args) -> int:
     try:
         manifest = _store.save(root, message=args.message or '', force=args.force)
     except RuntimeError as e:
-        return _err(str(e))
+        return _failed(args, str(e))
     except OSError as e:
-        return _err('could not save snapshot: {}'.format(e))
+        return _failed(args, 'could not save snapshot: {}'.format(e))
 
     snap_id = manifest['id']
     fc = manifest['file_count']
@@ -217,12 +242,12 @@ def cmd_show(args) -> int:
         # saved yet, and `unedit show || bail` has to read the same here as
         # it does on the other two.
         if msg == 'no snapshots found':
-            return _err(msg, code=1)
-        return _err(msg)
+            return _failed(args, msg, code=1)
+        return _failed(args, msg)
     except (OSError, ValueError) as e:
         # The manifest was there a moment ago when it was listed.  Something
         # else moved it, or it is not the JSON it claims to be.
-        return _err('could not read that snapshot: {}'.format(e))
+        return _failed(args, 'could not read that snapshot: {}'.format(e))
 
     if args.json:
         _print_json({
@@ -288,10 +313,10 @@ def cmd_back(args) -> int:
         msg = str(e)
         # "no snapshots found" is a normal empty-store condition, not a usage error.
         if msg == 'no snapshots found':
-            return _err(msg, code=1)
-        return _err(msg)
+            return _failed(args, msg, code=1)
+        return _failed(args, msg)
     except OSError as e:
-        return _err('restore failed: {}'.format(e))
+        return _failed(args, 'restore failed: {}'.format(e))
 
     if args.json:
         _print_json(result)
@@ -317,8 +342,8 @@ def cmd_diff(args) -> int:
     except RuntimeError as e:
         msg = str(e)
         if msg == 'no snapshots found':
-            return _err(msg, code=1)
-        return _err(msg)
+            return _failed(args, msg, code=1)
+        return _failed(args, msg)
 
     added = result['added']
     modified = result['modified']
@@ -377,12 +402,12 @@ def cmd_drop(args) -> int:
     root = os.path.abspath(args.dir)
 
     if not args.all and not args.ids:
-        return _err('specify a snapshot ID or --all')
+        return _failed(args, 'specify a snapshot ID or --all')
 
     try:
         result = _store.drop_snapshots(root, args.ids or [], all_snaps=args.all)
     except RuntimeError as e:
-        return _err(str(e))
+        return _failed(args, str(e))
 
     n = result['dropped']
     gc = result['gc_objects']
@@ -560,8 +585,10 @@ def _run(argv=None) -> None:
     # current directory, which exists by definition.
     if not os.path.isdir(args.dir):
         what = 'not a directory' if os.path.exists(args.dir) else 'no such directory'
-        print('unedit: {}: {}'.format(what, args.dir), file=sys.stderr)
-        sys.exit(2)
+        # Through `_failed` like the rest: a mistyped `--project` is the most
+        # likely way a script gets stopped here, and it is the one that used to
+        # leave `--json` with nothing on stdout to parse.
+        sys.exit(_failed(args, '{}: {}'.format(what, args.dir)))
 
     sys.exit(fn(args))
 
