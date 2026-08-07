@@ -17,7 +17,8 @@ import sys
 
 from . import __version__
 from .git import find_repo_root, get_changes, GitError
-from .rules import RULE_DOCS, SEVERITY, gating_findings, run_rules
+from .rules import (RULE_DOCS, SEVERITY, gating_findings, run_rules,
+                    where_to_look)
 from .shell import run_as_a_command
 from .where import add_project_flag
 # What a scope file may hold, and where it is -- one file format read and
@@ -30,6 +31,11 @@ from . import scope as _scope
 # is `quoted` here rather than one of the blanking answers -- a path with a
 # space where a control character was is not a path on disk either.
 from .terminal import quoted
+# And what a *document* obeys rather than shows, which is a different list of
+# characters and was the half nobody wrote: the report is made of paths chosen
+# by whoever changed the tree, and a filename with a `*` or a `[link](...)` in
+# it renders as neither a filename nor anything a reader can copy.
+from .markdown import as_a_path, as_prose
 
 
 # ---------------------------------------------------------------------------
@@ -67,8 +73,8 @@ _SEV_PAD = {"HIGH": "HIGH ", "MED": "MED  ", "LOW": "LOW  "}
 
 
 def _fmt_finding(f):
-    loc = f"{quoted(f.file)}:{f.line}" if f.line else quoted(f.file)
-    return f"  {_SEV_PAD.get(f.severity, f.severity)}  {loc}  {quoted(f.reason)}"
+    return (f"  {_SEV_PAD.get(f.severity, f.severity)}  "
+            f"{quoted(where_to_look(f))}  {quoted(f.reason)}")
 
 
 def _nothing_reviewed_line(since_ref, staged_only):
@@ -255,8 +261,8 @@ def _write_report(findings, changes, since_ref, report_path):
             continue
         lines += [f"## {sev} ({len(group)})", ""]
         for f in group:
-            loc = f"{quoted(f.file)}:{f.line}" if f.line else quoted(f.file)
-            lines.append(f"- **{loc}** — {quoted(f.reason)}")
+            lines.append("- {} — {}".format(as_a_path(where_to_look(f)),
+                                            as_prose(f.reason)))
         lines.append("")
 
     if not changes:
@@ -270,7 +276,8 @@ def _write_report(findings, changes, since_ref, report_path):
         # The report outlives the terminal it was made in, so the gap in it has
         # to be written down next to the findings rather than only shouted once.
         lines += ["## Not reviewed ({})".format(len(unread)), ""]
-        lines += ["- **{}** — could not be read ({})".format(quoted(p_), quoted(w))
+        lines += ["- {} — could not be read ({})".format(as_a_path(p_),
+                                                         as_prose(w))
                   for p_, w in unread]
         lines.append("")
 

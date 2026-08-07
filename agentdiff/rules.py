@@ -24,6 +24,25 @@ SEVERITY = ("HIGH", "MED", "LOW")
 Finding = collections.namedtuple("Finding", ["severity", "file", "line", "reason", "rule"])
 
 
+def where_to_look(finding):
+    """The place a finding sends the reader: ``file:line``, or just ``file``.
+
+    Line ``0`` is what the rules below write when the finding is about the file
+    rather than about somewhere in it -- a lock file that changed, a file that
+    was deleted, an executable bit that appeared.  There is no line 0 in a
+    file, so it reads as "no line" everywhere, and ``file:0`` would send an
+    editor to the top of the file as if that were where to look.
+
+    It lives here, next to the ``Finding`` that carries the 0 and the thirty
+    rules that write it, and not in whichever view happens to print it.  Both
+    views printed it, each with its own copy of this rule, which is a fact
+    about a finding stated in two places that could disagree -- and the
+    separator is not arbitrary either: ``file:line`` is what an editor, a
+    terminal's click handler and ``grep -n`` all already take.
+    """
+    return "{}:{}".format(finding.file, finding.line) if finding.line else finding.file
+
+
 # ---------------------------------------------------------------------------
 # Diff helpers
 # ---------------------------------------------------------------------------
