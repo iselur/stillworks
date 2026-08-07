@@ -62,25 +62,12 @@ def _failed(args, msg: str, code: int = 2) -> int:
     return code
 
 
-def _fmt_ts(ts: str) -> str:
-    """Shorten ISO timestamp for display.
-
-    Manifests carry an offset now, so the stored stamp reads
-    `2026-08-04T09:36:08+01:00`.  It is dropped here: the time shown is already
-    the local one, and a column of trailing `+01:00` is a fact you knew.
-    Stores written before the offset existed have nothing to drop.
-    """
-    ts = ts.replace('T', ' ')
-    body, sign, _ = ts.rpartition('+')
-    if sign and len(ts) - len(body) == 6:
-        return body
-    if ts.endswith('Z'):
-        return ts[:-1]
-    # A `-` offset, but only when it trails a time rather than being part of
-    # the date: `2026-08-04 09:36:08-07:00`.
-    if len(ts) > 6 and ts[-6] == '-' and ts[-3] == ':' and ':' in ts[:-6]:
-        return ts[:-6]
-    return ts
+# What a moment looks like when this tool prints one is `store.fmt_time` and
+# `store.fmt_mtime`, next to `fmt_size` and public for the same reason.  It
+# used to be here, cutting the offset off the end of the stored string with
+# string surgery -- which reads the stamp as a shape rather than as a moment,
+# and prints a wall clock that is only the reader's if the store was written
+# on the reader's machine.
 
 
 def _print_json(obj) -> None:
@@ -218,7 +205,7 @@ def cmd_list(args) -> int:
     # Human-readable table
     # newest first
     for s in reversed(snaps):
-        ts = _fmt_ts(s.get('timestamp', ''))
+        ts = _store.fmt_time(s.get('timestamp', ''))
         msg = row(s.get('message', ''))
         fc = s.get('file_count', 0)
         sz = _store.fmt_size(s.get('total_size', 0))
@@ -262,7 +249,7 @@ def cmd_show(args) -> int:
     # a newline in the message printed the rest of itself above the file
     # list, in the same shape as the file list.
     print('snapshot: {}'.format(row(manifest['id'])))
-    ts = _fmt_ts(manifest.get('timestamp', ''))
+    ts = _store.fmt_time(manifest.get('timestamp', ''))
     msg = row(manifest.get('message', ''))
     print('  when: {}{}'.format(ts, '  — ' + msg if msg else ''))
     print('  {} files'.format(manifest.get('file_count', len(files))))
@@ -273,13 +260,11 @@ def cmd_show(args) -> int:
             print('  {} -> {}'.format(path, row(f.get('target', ''))))
         else:
             sz = _store.fmt_size(f.get('size', 0))
-            ts_str = ''
-            if 'mtime' in f:
-                import datetime
-                try:
-                    ts_str = '  ' + datetime.datetime.fromtimestamp(f['mtime']).strftime('%Y-%m-%d %H:%M')
-                except (OSError, OverflowError, ValueError):
-                    pass
+            # The same clock as the `when:` row above these, which it was
+            # not: that one showed seconds and this one did not, so a snapshot
+            # read as having happened before the files it holds.
+            shown = _store.fmt_mtime(f['mtime']) if 'mtime' in f else ''
+            ts_str = '  ' + shown if shown else ''
             # Padded in cells, not characters: a CJK filename is drawn twice as
             # wide as it is long, and `ljust` would put the size column two
             # places right of where it is on every other row.
@@ -354,7 +339,7 @@ def cmd_diff(args) -> int:
         _print_json(result)
         return 0
 
-    ts = _fmt_ts(result.get('snapshot_timestamp', ''))
+    ts = _store.fmt_time(result.get('snapshot_timestamp', ''))
     msg = result.get('snapshot_message', '')
     header = 'diff vs {}  {}'.format(snap_id, ts)
     if msg:

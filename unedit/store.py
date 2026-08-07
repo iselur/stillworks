@@ -84,6 +84,71 @@ def fmt_size(n: int) -> str:
         return '{:.1f} GB'.format(n / 1024 ** 3)
 
 
+#: How this tool writes a moment down, in every view that writes one.  A
+#: listing showed seconds and the file rows under `show` did not, so the same
+#: command printed two shapes of clock and the snapshot looked like it had
+#: happened before the files it holds.
+_SHOWN = '%Y-%m-%d %H:%M:%S'
+
+
+def _as_the_reader_sees_it(moment: datetime.datetime) -> str:
+    """`moment`, on the clock of whoever is reading, to the second.
+
+    A stamp with no offset is one this tool wrote before it carried one, on
+    this machine: it was local then and it is read as local now.
+    """
+    if moment.tzinfo is not None:
+        moment = moment.astimezone()
+    return moment.strftime(_SHOWN)
+
+
+def fmt_time(timestamp: str) -> str:
+    """A stamp out of a manifest, on the clock of whoever is reading it.
+
+    `save` writes the moment with its offset, and says why in a comment: a
+    stamp without one means a different instant on every machine.  This used
+    to cut the offset off the end of the string and print the rest, which is
+    that same different instant -- a store written in a container running UTC
+    listed an hour earlier than it happened, and nothing on the row said so.
+    So it is read as a moment and written back out here, rather than trimmed.
+
+    Public for the same reason `fmt_size` is: three views print this stamp and
+    each of them printing its own is three spellings of one moment.
+
+    A stamp this cannot read comes back as it was.  Somebody else's file in
+    `snapshots/` is a thing to notice, not a reason for `unedit list` to stop.
+    """
+    if not timestamp:
+        return ''
+    text = timestamp
+    if text[-1:] in ('Z', 'z'):
+        # `fromisoformat` learned to read a trailing Z in 3.11, and this
+        # package supports 3.9: load-bearing on the floor, a no-op above it.
+        text = text[:-1] + '+00:00'
+    try:
+        return _as_the_reader_sees_it(datetime.datetime.fromisoformat(text))
+    except (ValueError, OSError, OverflowError):
+        return timestamp
+
+
+def fmt_mtime(mtime: float) -> str:
+    """When a file last changed, on the same clock and in the same shape.
+
+    A POSIX time is an instant with no zone in it at all, so there is nothing
+    to drop: it is resolved against the reader's clock, which is what the row
+    beside it is now doing too.
+
+    A time the platform cannot turn into a date comes back empty -- an mtime
+    from a filesystem that stores something else is not worth failing `show`
+    over, and the row still says the name and the size.
+    """
+    try:
+        return _as_the_reader_sees_it(
+            datetime.datetime.fromtimestamp(mtime).astimezone())
+    except (OSError, OverflowError, ValueError):
+        return ''
+
+
 # The shape `_new_id` makes, as a manifest filename.  Used to tell one of our
 # files apart from anything else that happens to be in `snapshots/`.
 _SNAPSHOT_NAME_RE = re.compile(r'^\d{8}-\d{6}-\d{6}-[a-z0-9]{4}\.json$')
