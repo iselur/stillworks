@@ -11,7 +11,7 @@ from .clock import how_long, when
 from .parser import active_spans
 from .terminal import block as safe_for_terminal
 from .terminal import display_width, pad as _pad
-from .which_file import as_shown
+from .which_file import as_shown, paths_as_shown
 
 
 # ---------------------------------------------------------------------------
@@ -142,27 +142,35 @@ def _identifying_line(cmd: str) -> Tuple[str, bool]:
     return (lines[0].strip(), len(lines) > 1) if lines else ("", False)
 
 
-def _fitted_headline(line: str, more_below: bool, width: int) -> str:
+def _fitted_headline(line: str, more_below: bool, width: int,
+                     project: str = "") -> str:
     """An identifying line in `width` cells, both of its marks included.
 
     The "and there is more of it" mark is taken out of the width before the
     line is cut, not added after: both marks are part of what has to fit.
+
+    The paths inside the line are shortened before anything is cut off the end
+    of it, which is what stops the row spending its cells on a directory the
+    reader is already standing in and then losing the flags that say what the
+    command actually did.  `project` is the root they are looking at; without
+    one only their home comes off, which is still most of a path on this
+    machine.
     """
     if not line:
         return ""
     more = " " + _CUT if more_below else ""
-    return shortened(line, width - display_width(more)) + more
+    return paths_as_shown(line, project, width - display_width(more)) + more
 
 
-def _cmd_headline(cmd: str, width: int = 56) -> str:
+def _cmd_headline(cmd: str, width: int = 56, project: str = "") -> str:
     """First line of a command, marked when more lines follow, in `width`."""
     line, more_below = _identifying_line(cmd)
-    return _fitted_headline(line, more_below, width)
+    return _fitted_headline(line, more_below, width, project)
 
 
-def _shorten_cmd(cmd: str, width: int = 72) -> str:
+def _shorten_cmd(cmd: str, width: int = 72, project: str = "") -> str:
     """Shorten a shell command for display, keeping the end that names it."""
-    return shortened(cmd.replace("\n", " ").strip(), width)
+    return paths_as_shown(cmd.replace("\n", " ").strip(), project, width)
 
 
 def _one_row(text: str, width: int = 400) -> str:
@@ -520,8 +528,8 @@ def render_digest(
             # nothing.
             times = f"  ({n}x)" if n > 1 else ""
             room = _DIGEST_WIDTH - display_width(label) - display_width(times)
-            lines.append(label + _fitted_headline(head, more_below, room)
-                         + times)
+            lines.append(label + _fitted_headline(head, more_below, room,
+                                                  g["path"]) + times)
 
     if len(groups) > max_projects:
         rest = len(groups) - max_projects
@@ -619,7 +627,7 @@ def _render_session_text(
             # opposite directions -- to the last 80 characters and then to the
             # first 72 of those -- so what was printed was the middle of the
             # command and neither end of it.
-            lines.append(f"      $ {_shorten_cmd(cmd)}")
+            lines.append(f"      $ {_shorten_cmd(cmd, project=s['project'])}")
 
     tokens = _fmt_tokens(s)
     if tokens:

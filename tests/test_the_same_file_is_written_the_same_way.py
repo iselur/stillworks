@@ -37,8 +37,8 @@ What this file checks, and why each is not covered by the ones before it:
 
   * the two `which_file.py` are byte-identical, so a rule changed on one side is
     changed on both or it is a failing test;
-  * the interface is the one name, because a second name is a second thing both
-    commands have to be understood against;
+  * the interface is the two names and no more, because every name here is a
+    thing both commands have to be understood against;
   * both `render.py` actually go through it -- the cheapest way to undo all of
     this is to leave the file sitting there unread;
   * neither has regrown a shortening of its own, which is exactly how the first
@@ -73,10 +73,21 @@ sys.path.insert(0, _ROOT)
 # does it.  One apiece: `render.py` is where a path becomes a line in both.
 THE_CALLERS = {"agentlog": ("render.py",), "agentwatch": ("render.py",)}
 
-# What a caller is allowed to ask for.  One name, and it should stay one: the
-# question "how is this path written" has a single answer, and a second entry
-# here would mean the two commands can differ again, with permission.
-THE_INTERFACE = {"as_shown"}
+# What a caller is allowed to ask for.  Two names, and they are one answer asked
+# two ways: `as_shown` for a line that *is* a path, `paths_as_shown` for a line
+# that has paths in it -- a command, which is what both tools mostly print.
+#
+# The second name was added rather than folded into the first because the two
+# differ on which end survives.  A path is cut from the front, since the end of
+# it is the file; a command is cut from the right, since the front of it is what
+# names the command.  One function taking a flag for that would be a caller
+# deciding how a path is written, which is the whole thing this file exists to
+# stop.  What they share -- what comes off a path, and in what order -- is one
+# private helper both call, so neither command can drift from the other.
+#
+# A third entry here needs the same argument.  It is not a list of everything in
+# the module; it is the set of things both commands are understood against.
+THE_INTERFACE = {"as_shown", "paths_as_shown"}
 
 # Moves that only belong to code deciding how a path is written.  A `render.py`
 # doing any of them has started a second copy of the rule.

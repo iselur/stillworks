@@ -28,12 +28,20 @@ that is what a column that clips from the right gives you.  Inside a single
 name it goes the other way -- `test_the_note_about…` keeps its front, since the
 front is what you recognise a name by, and that is what every other column in
 these tools does with a string too long for it.
+
+`paths_as_shown` is the same rule applied to a line that has paths *in* it
+rather than being one.  Commands are mostly paths, and a command row was
+getting the full absolute path -- the part this module exists to remove --
+repeated inside it, and then the row was clipped from the right, so what fell
+off the end was the flags saying what the command did.  On 15,834 real commands
+68% were too wide for the row and 47% of those lost a path to the clip.
 """
 
 from __future__ import annotations
 
 import os
-from typing import Optional
+import re
+from typing import List, Optional, Tuple
 
 from .terminal import display_width
 
@@ -58,6 +66,138 @@ def as_shown(path: str, project: str = "", room: Optional[int] = None) -> str:
     return shown if room is None else _fit_keeping_the_file(shown, room)
 
 
+#: A path inside a line of other text.  Absolute only -- ``/x`` or ``~/x`` --
+#: because a relative path has no leading part a reader already knows, so there
+#: would be nothing to take off it, and matching one is all risk and no gain.
+#:
+#: The character before it is an allowlist rather than "not a word character",
+#: which is what keeps the two things that look like paths and are not.  `:` is
+#: absent on purpose: without it `https://host/a/b` would have `//host/a/b`
+#: taken out of it and shortened, and mangling a URL is a visible bug where
+#: leaving a `PATH=/a:/b` alone is merely a missed shortening.  `sed s/a/b/`
+#: needs no case of its own -- `s` is a word character, so the run never starts.
+#:
+#: `:` ends the run as well as failing to start one, which is what stops
+#: `PATH=/usr/local/bin:/usr/bin` being read as a single enormous path and
+#: shortened through its own separator.  It costs nothing on a real filename
+#: carrying a colon -- the run stops early, the rest of the name stays put as
+#: ordinary text, and the two halves are written back out side by side.
+_A_PATH_IN_A_LINE = re.compile(r"""(?:^|(?<=[\s"'=(<>|&;,]))(~?/[^\s"'`:]*)""")
+
+
+def paths_as_shown(text: str, project: str = "", room: Optional[int] = None) -> str:
+    """A line of text with the paths in it written the way a reader would say them.
+
+    Same promise as `as_shown`, for a line that *contains* paths rather than
+    being one: a command, in practice.  The front of the line is what
+    identifies it -- `find`, `grep`, `bash` -- so unlike a path this is cut from
+    the right; the paths inside it are still shortened from the front, because
+    the end of a path is still the file.
+
+    Shortening happens in two stages, and the order is the point.  What the
+    reader already knows -- the project root, their own home -- comes off every
+    path always, because dropping it costs nothing: they are looking at that
+    project, on that machine.  Directories come off only under pressure, and
+    only off the widest path still in the line, one component at a time, until
+    the line fits.  That way a line with room to spare says everything, and a
+    line without it gives up the least useful thing first.
+
+    ``room`` of ``None`` does the free half and stops, leaving the fitting to a
+    caller that has its own ideas about width.
+    """
+    if not text:
+        return ""
+    if room is not None and room <= 0:
+        # A row with no cells left gets nothing, not the one cell the cut mark
+        # costs.  `as_shown` has said this since it was written; a second rule
+        # in the same file that overflowed by one instead would be the same bug
+        # twice with one of them fixed.
+        return ""
+    pieces, paths = _split_around_paths(text)
+    shown = [_minus_what_they_know(p, project) for p in paths]
+    if room is None:
+        return _rejoin(pieces, shown)
+    while display_width(_rejoin(pieces, shown)) > room:
+        widest = _the_widest_that_can_still_give(shown)
+        if widest is None:
+            break
+        shown[widest] = _one_directory_less(shown[widest])
+    line = _rejoin(pieces, shown)
+    return line if display_width(line) <= room else _fit_keeping_the_front(line, room)
+
+
+def _split_around_paths(text: str) -> Tuple[List[str], List[str]]:
+    """The line as the bits between paths, and the paths, in order.
+
+    Kept apart so the shortening never sees the rest of the line and the rest
+    of the line never has a `/` read into it: rejoining is `pieces[0] + path[0]
+    + pieces[1] + ...`, with one more piece than there are paths.
+    """
+    pieces: List[str] = []
+    paths: List[str] = []
+    at = 0
+    for found in _A_PATH_IN_A_LINE.finditer(text):
+        pieces.append(text[at:found.start(1)])
+        paths.append(found.group(1))
+        at = found.end(1)
+    pieces.append(text[at:])
+    return pieces, paths
+
+
+def _rejoin(pieces: List[str], paths: List[str]) -> str:
+    out = [pieces[0]]
+    for i, path in enumerate(paths):
+        out.append(path)
+        out.append(pieces[i + 1])
+    return "".join(out)
+
+
+def _the_widest_that_can_still_give(shown: List[str]) -> Optional[int]:
+    """Which path to take a directory off next, or None if none has one left.
+
+    Widest first, so the line gives up its least useful cells first.
+
+    Whether a path has anything left is asked of the shortener rather than
+    worked out again here: a path down to `…/name` comes back unchanged, and
+    two places deciding that separately is two places to get it wrong.
+
+    Not measured in saved cells, which is the tempting version and is wrong.
+    `a/b/c/app.py` gives up `a` for a mark and stays twelve cells wide, but the
+    step after it is `…/c/app.py` and the one after that fits -- a rule that
+    stopped at the first step buying nothing would freeze the path there and cut
+    the line's tail off instead.  Equal-width swaps are a step on the way, and
+    the one path where a swap would be pointless -- `~/name`, already an elision
+    -- reports itself done rather than equal.
+    """
+    best, best_width = None, -1
+    for i, path in enumerate(shown):
+        if _one_directory_less(path) == path:
+            continue
+        width = display_width(path)
+        if width > best_width:
+            best, best_width = i, width
+    return best
+
+
+def _one_directory_less(path: str) -> str:
+    """Drop the front-most directory, or return the path when it has none left.
+
+    The leading `/` is not a directory, and neither is a `…` left by an earlier
+    step, so they come off with the component they introduce -- otherwise the
+    first step of `/home/you/a/b.py` would be `…/home/you/a/b.py`, a cell
+    *wider* than what it replaced that drops nothing.  A `~` goes the same way
+    for a different reason: it is already an elision of home, one cell exactly
+    like the mark that would replace it, so `~/a/b.py` has nothing to gain
+    until `a` goes with it.
+    """
+    parts = path.split("/")
+    if parts[0] in ("", _ELIDED) or parts[0].startswith("~"):
+        parts = parts[1:]
+    if len(parts) <= 1:
+        return path                 # only the file itself is left
+    return _ELIDED + "/" + "/".join(parts[1:])
+
+
 def _minus_what_they_know(path: str, project: str) -> str:
     """Drop the leading part the reader is not learning anything from."""
     if project:
@@ -72,6 +212,12 @@ def _minus_what_they_know(path: str, project: str) -> str:
     # `~` in front of every path on the disk says nothing.
     if path.startswith(home + os.sep):
         return "~" + path[len(home):]
+    # Home itself, with nothing after it.  `cd /home/you` is a real command and
+    # the rule above cannot see it: there is no separator to require.  Left out,
+    # it is the one path that gets *longer* under pressure -- `…/you` -- which
+    # is a directory nobody can place standing in for the one everybody can.
+    if path == home:
+        return "~"
     return path
 
 
