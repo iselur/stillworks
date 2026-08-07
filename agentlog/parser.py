@@ -57,6 +57,7 @@ from .transcript import (
     session_id_for,
     tool_path,
 )
+from .where_the_logs_are import log_dirs
 
 
 # ---------------------------------------------------------------------------
@@ -955,11 +956,10 @@ def find_sessions(
     computed from fewer files than are on disk looks exactly like a complete
     one.  If neither log directory exists every list is empty.
     """
-    if home_dir is None:
-        home_dir = os.path.expanduser("~")
-
-    claude_dir = os.path.join(home_dir, ".claude", "projects")
-    codex_dir = os.path.join(home_dir, ".codex", "sessions")
+    where = {source: (shown_as, directory)
+             for source, shown_as, directory in log_dirs(home_dir)}
+    claude_shown, claude_dir = where["claude"]
+    codex_shown, codex_dir = where["codex"]
 
     sessions: List[Dict] = []
     sources: List[str] = []
@@ -990,13 +990,13 @@ def find_sessions(
         sessions.append(sess)
 
     if os.path.isdir(claude_dir):
-        sources.append("Claude Code")
+        sources.append(claude_shown)
         for path in _oldest_first(
                 glob.glob(os.path.join(claude_dir, "**", "*.jsonl"), recursive=True)):
             _add(parse_claude_session(path, seen_uuids), path)
 
     if os.path.isdir(codex_dir):
-        sources.append("Codex")
+        sources.append(codex_shown)
         # Codex records carry no uuid, and its duplicate files are its parallel
         # workers, whose separate work does add up -- so nothing here is deduped
         # by record.  It is read in the same order only so the report is the

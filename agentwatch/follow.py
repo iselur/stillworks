@@ -20,9 +20,7 @@ from .events import Tracker, events_from_line
 from .transcript import decode_claude_project, session_id_for
 from .project import matches
 from .unusable import UNREADABLE
-
-CLAUDE_SUBDIR = os.path.join(".claude", "projects")
-CODEX_SUBDIR = os.path.join(".codex", "sessions")
+from .where_the_logs_are import SOURCES, log_dirs
 
 # How far back a file's mtime may be before it is assumed finished.  Generous:
 # an agent that spends ten minutes on one tool call is thinking, not gone.
@@ -63,15 +61,18 @@ def _mtime_then_name(entry: Tuple[str, str]) -> Tuple[float, str]:
         return (float("inf"), path)
 
 
-def discover(home: str, sources: Tuple[str, ...] = ("claude", "codex")) -> List[Tuple[str, str]]:
-    """(path, source) for every session log under a home directory."""
+def discover(home: str, sources: Tuple[str, ...] = SOURCES) -> List[Tuple[str, str]]:
+    """(path, source) for every session log under a home directory.
+
+    One loop over the roster rather than a branch per agent: the branches were
+    the same three lines twice, and the third agent would have made it three.
+    """
     found: List[Tuple[str, str]] = []
-    if "claude" in sources:
-        for path in _walk_jsonl(os.path.join(home, CLAUDE_SUBDIR)):
-            found.append((path, "claude"))
-    if "codex" in sources:
-        for path in _walk_jsonl(os.path.join(home, CODEX_SUBDIR)):
-            found.append((path, "codex"))
+    for source, _shown_as, directory in log_dirs(home):
+        if source not in sources:
+            continue
+        for path in _walk_jsonl(directory):
+            found.append((path, source))
     return found
 
 

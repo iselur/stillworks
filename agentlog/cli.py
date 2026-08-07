@@ -56,6 +56,7 @@ from .window import Unparseable, Window
 from .when import HOW_TO_SPELL_IT
 from .project import HOW_IT_MATCHES, matches
 from .shell import as_typed, run_as_a_command
+from .where_the_logs_are import log_dirs
 
 
 def _filter_project(sessions: List[Dict], needle: str) -> List[Dict]:
@@ -83,11 +84,16 @@ _COMMANDS_WITH_ARG = ("since", "on", "show")
 
 
 def _log_dirs(home_dir: Optional[str]) -> List[str]:
-    home = home_dir or os.environ.get("AGENTLOG_HOME") or os.path.expanduser("~")
-    return [
-        os.path.realpath(os.path.join(home, ".claude", "projects")),
-        os.path.realpath(os.path.join(home, ".codex", "sessions")),
-    ]
+    """The log directories, resolved, for comparing a path against.
+
+    `realpath` is here and not in `where_the_logs_are` because this is the one
+    caller that compares rather than prints.  A home reached through a symlink
+    -- ``/home`` on a box where it is a link to ``/mnt/home`` -- gives a target
+    and a log directory that are the same place spelled two ways, and a guard
+    that compares the spellings lets the write through.
+    """
+    home = home_dir or os.environ.get("AGENTLOG_HOME") or None
+    return [os.path.realpath(directory) for _, _, directory in log_dirs(home)]
 
 
 def _refuses_to_write(target: str, home_dir: Optional[str]) -> Optional[str]:
@@ -408,12 +414,18 @@ def _note_unusable(unusable, verbose: bool, to_stderr: bool = False) -> None:
 
 
 def _no_sessions_msg(home_dir: Optional[str]) -> None:
-    home = home_dir or os.path.expanduser("~")
+    # The places named here are the places that were looked in, because they
+    # come from the same list the looking did.  A sentence that tells you where
+    # to go and start a session, naming a directory nothing read, is worse than
+    # saying nothing: it is a wrong answer to "why is this empty".
+    looked_in = "".join(
+        "  {:<14}{}\n".format(shown_as + ":",
+                              os.path.join(directory, "**", "*.jsonl"))
+        for _, shown_as, directory in log_dirs(home_dir))
     print(
         "No agent session logs found.\n\n"
         "agentlog looks for:\n"
-        f"  Claude Code:  {os.path.join(home, '.claude', 'projects', '**', '*.jsonl')}\n"
-        f"  Codex:        {os.path.join(home, '.codex', 'sessions', '**', '*.jsonl')}\n\n"
+        f"{looked_in}\n"
         "Start a session with Claude Code (claude) or Codex (codex) and run agentlog again."
     )
 

@@ -27,6 +27,7 @@ from .events import KINDS
 from .follow import DEFAULT_STALE_S, Watcher
 from .printer import Printer
 from .shell import as_typed, run_as_a_command
+from .where_the_logs_are import SOURCES
 from .project import HOW_IT_MATCHES
 from .unusable import note_about
 from .when import HOW_TO_SPELL_IT, parse_moment
@@ -89,7 +90,7 @@ def _sources(args) -> Tuple[str, ...]:
         return ("claude",)
     if args.codex and not args.claude:
         return ("codex",)
-    return ("claude", "codex")
+    return SOURCES
 
 
 def _resolve_home(args, parser) -> str:
