@@ -87,12 +87,15 @@ def _write_note(session_id: str, transcript_path: str,
         raise ValueError("nothing to read in {}".format(transcript_path))
     body = PREAMBLE + "\n\n" + render_digest(sessions, "this session")
     path = _note_for(session_id, home_dir)
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+    # A note is a condensed transcript -- prompts, paths, failing commands --
+    # so the store is private to its owner from the moment it exists.
+    os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
     _sweep(os.path.dirname(path), now)
     # Written beside and renamed on top, so a note is either the old one or
     # the new one and never half of each.
     temporary = path + ".part"
-    with open(temporary, "w", encoding="utf-8") as fh:
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with open(fd, "w", encoding="utf-8") as fh:
         fh.write(body)
     os.replace(temporary, path)
     return path
@@ -148,6 +151,12 @@ def handle(payload_text: str, home_dir: Optional[str] = None,
 
     try:
         if event == "PreCompact":
+            # A subagent compacting mid-task sends its parent's session_id
+            # plus an agent_id of its own (Codex does this).  A note written
+            # here would be the subagent's story handed to the root session at
+            # its next resume, stated as the root's own past.  Say nothing.
+            if payload.get("agent_id"):
+                return "", ""
             path = _write_note(session_id, payload.get("transcript_path") or "",
                                home_dir, now)
             return "", "agentlog handover: wrote {}\n".format(path)
