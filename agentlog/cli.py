@@ -45,7 +45,7 @@ from typing import Dict, List, Optional, Tuple
 
 from . import __version__
 from .brief import render_brief
-from .parser import find_sessions
+from .parser import find_sessions, read_one_session
 from .render import (
     render_digest,
     render_json,
@@ -179,6 +179,12 @@ def _build_parser() -> argparse.ArgumentParser:
              "(asks a model; sends the day off this machine)",
     )
     p.add_argument(
+        "--file",
+        metavar="PATH",
+        help="read only this transcript, all of it "
+             "(the time command does not apply)",
+    )
+    p.add_argument(
         "--sessions",
         action="store_true",
         help="list every session instead of the per-project digest",
@@ -266,6 +272,17 @@ def _run(argv=None) -> int:
                 file=sys.stderr,
             )
             return 2
+
+    # --file names the one session to read.  'list' and 'show' are both ways of
+    # finding a session among many, which is the job --file has already done.
+    if args.file is not None and args.command in ("list", "show"):
+        print(
+            "agentlog: --file cannot be combined with '{}'\n"
+            "  --file already names the session; '{}' is for finding "
+            "one.".format(args.command, args.command),
+            file=sys.stderr,
+        )
+        return 2
 
     if args.limit < 1:
         print(
@@ -362,12 +379,24 @@ def _run(argv=None) -> int:
     period_label = window.label
 
     # Load and filter
-    sessions, sources, unusable = find_sessions(home_dir)
-    if not sessions and not sources:
-        _no_sessions_msg(home_dir)
-        return 0
+    if args.file is not None:
+        # A named file is the whole scope, so the window is not applied: a
+        # session handed over by a hook may well have started yesterday, and
+        # clipping it to today would answer an explicit request with silence.
+        sessions, sources, unusable = read_one_session(args.file)
+        if not sessions:
+            print("agentlog: nothing to read in {}".format(args.file),
+                  file=sys.stderr)
+            _note_unusable(unusable, args.verbose, to_stderr=True)
+            return 2
+        period_label = "this session"
+    else:
+        sessions, sources, unusable = find_sessions(home_dir)
+        if not sessions and not sources:
+            _no_sessions_msg(home_dir)
+            return 0
 
-    filtered = window.clip(sessions)
+    filtered = sessions if args.file is not None else window.clip(sessions)
     if args.project:
         filtered = _filter_project(filtered, args.project)
 

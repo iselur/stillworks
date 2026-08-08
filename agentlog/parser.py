@@ -978,6 +978,46 @@ def _oldest_first(paths: List[str]) -> List[str]:
     return sorted(paths, key=key)
 
 
+def _how_much_it_found(sess: Optional[Dict]) -> int:
+    """How much of a file a reading actually got hold of."""
+    if not sess or sess is REPLAY:
+        return 0
+    return (len(sess["events"]) + len(sess["commands"])
+            + len(sess["files_read"]) + len(sess["files_written"])
+            + sess["user_turns"])
+
+
+def read_one_session(path: str) -> "tuple[List[Dict], List[str], List[tuple]]":
+    """Read exactly one log file, whoever wrote it.
+
+    Returns the same ``(sessions, sources, unusable)`` triple as
+    ``find_sessions``, so everything downstream is unchanged.  This exists for
+    the caller that already knows which file it wants -- a hook is handed a
+    transcript path and given about a minute, and scanning a whole home takes
+    minutes.
+
+    Which agent wrote the file is settled by reading it both ways and keeping
+    the reading that got hold of more, not by the path it arrived on or by a
+    marker record.  A hook's path is wherever the agent put it, and the marker
+    is the first thing a truncated file loses -- the two failures this is most
+    likely to meet are exactly the two a sniff cannot survive.  Reading one
+    file twice costs milliseconds; guessing wrong costs the whole handover.
+    """
+    # isfile, not exists: a directory would be caught below anyway, but a pipe
+    # or a device would be opened and read, and a read that never returns is
+    # the one failure a hook on a timer cannot report.
+    if not os.path.isfile(path):
+        return [], [], [(path, UNREADABLE)]
+    readings = [("Claude Code", parse_claude_session(path)),
+                ("Codex", parse_codex_session(path))]
+    readings.sort(key=lambda pair: _how_much_it_found(pair[1]), reverse=True)
+    shown, sess = readings[0]
+    reason = _why_unusable(path, sess)
+    if reason or _how_much_it_found(sess) == 0:
+        return [], [], [(path, reason or NO_RECORDS)]
+    return [sess], [shown], []
+
+
 def find_sessions(
     home_dir: Optional[str] = None,
 ) -> tuple[List[Dict], List[str], List[tuple]]:
