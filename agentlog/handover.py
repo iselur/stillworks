@@ -29,6 +29,7 @@ import os
 import time
 from typing import Optional, Tuple
 
+from .goal import anchor as declared_goal
 from .parser import read_one_session
 from .render import render_digest
 
@@ -149,19 +150,26 @@ def handle(payload_text: str, home_dir: Optional[str] = None,
     if not session_id:
         return "", "agentlog handover: payload names no session\n"
 
+    # A subagent fires these events too, carrying its parent's session_id
+    # plus an agent_id of its own (Codex does this).  Writing then would
+    # store the subagent's story as the root's; reading then would take --
+    # and delete -- the note the root session is waiting on.  Say nothing.
+    if payload.get("agent_id"):
+        return "", ""
+
     try:
         if event == "PreCompact":
-            # A subagent compacting mid-task sends its parent's session_id
-            # plus an agent_id of its own (Codex does this).  A note written
-            # here would be the subagent's story handed to the root session at
-            # its next resume, stated as the root's own past.  Say nothing.
-            if payload.get("agent_id"):
-                return "", ""
             path = _write_note(session_id, payload.get("transcript_path") or "",
                                home_dir, now)
             return "", "agentlog handover: wrote {}\n".format(path)
         if event == "SessionStart":
-            body = _read_note(session_id, home_dir)
+            note = _read_note(session_id, home_dir)
+            # The declared goal rides in front of the note, and alone when
+            # there is no note: what the work is for, then what it has done.
+            # This session's own goal outranks the directory's shared one.
+            goal = declared_goal(payload.get("cwd") or "", session_id,
+                                 home_dir, now)
+            body = "\n\n".join(part for part in (goal, note) if part)
             if not body:
                 return "", ""
             return json.dumps({"hookSpecificOutput": {

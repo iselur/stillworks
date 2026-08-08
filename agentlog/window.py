@@ -129,8 +129,8 @@ class Window:
         raise Unparseable(
             "unknown command '{}'\n"
             "  try: agentlog today | yesterday | week | since DATE | on DAY\n"
-            "       agentlog show ID | agentlog list | agentlog "
-            "handover".format(command))
+            "       agentlog show ID | agentlog list | agentlog goal | "
+            "agentlog handover".format(command))
 
     def clip(self, sessions: List[Dict]) -> List[Dict]:
         """The sessions that overlap this window, cut down to what they did in it.

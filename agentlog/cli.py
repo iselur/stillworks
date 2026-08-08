@@ -9,6 +9,8 @@ Commands
   agentlog show SESSION_ID       # one session in full detail
   agentlog list                  # recent sessions, compact table (default 50)
   agentlog list --all            # all sessions
+  agentlog goal ["TEXT"]         # declare (or show) this project's goal;
+                                 #   --clear forgets it
 
 View flags (time commands)
   --sessions                     # per-session view instead of the digest
@@ -45,6 +47,7 @@ from typing import Dict, List, Optional, Tuple
 
 from . import __version__
 from .brief import render_brief
+from .goal import clear as clear_goal, declare as declare_goal, show as show_goal
 from .handover import handle as handle_hook
 from .parser import find_sessions, read_one_session
 from .render import (
@@ -84,8 +87,9 @@ def _filter_project(sessions: List[Dict], needle: str) -> List[Dict]:
 # ---------------------------------------------------------------------------
 
 # Commands that take a second word.  Everything else takes none, and a stray
-# word after them is a typo the person deserves to be told about.
-_COMMANDS_WITH_ARG = ("since", "on", "show")
+# word after them is a typo the person deserves to be told about.  `goal`
+# is here because its word is optional: bare it shows, with text it declares.
+_COMMANDS_WITH_ARG = ("since", "on", "show", "goal")
 
 
 def _log_dirs(home_dir: Optional[str]) -> List[str]:
@@ -142,6 +146,8 @@ def _build_parser() -> argparse.ArgumentParser:
             "  agentlog list\n"
             "  agentlog today --html digest.html\n"
             "  agentlog week --json\n"
+            "  agentlog goal \"ship the importer; done when bad rows are "
+            "reported\"\n"
             "  agentlog handover        (run by an agent hook, not by you)\n"
         ),
     )
@@ -152,7 +158,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="today",
         metavar="COMMAND",
         help="today | yesterday | week | since DATE | on DAY | show ID | list "
-             "| handover (default: today)",
+             "| goal [TEXT] | handover (default: today)",
     )
     p.add_argument(
         "arg",
@@ -162,8 +168,9 @@ def _build_parser() -> argparse.ArgumentParser:
         # What `since` takes is read off the table that parses it, so this
         # cannot go on advertising a spelling the parser dropped -- or stay
         # quiet about one it gained, which is what happened with `10m`.
-        help="argument for 'since' ({}), 'on' (2026-07-15, 3d) "
-             "or 'show' (session ID prefix)".format(HOW_TO_SPELL_IT),
+        help="argument for 'since' ({}), 'on' (2026-07-15, 3d), "
+             "'show' (session ID prefix) or 'goal' (the goal, quoted)"
+             .format(HOW_TO_SPELL_IT),
     )
     p.add_argument("--html", metavar="FILE", help="write self-contained HTML to FILE")
     p.add_argument(
@@ -195,6 +202,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project",
         metavar="NAME",
         help=HOW_IT_MATCHES,
+    )
+    p.add_argument(
+        "--clear",
+        action="store_true",
+        help="goal: forget the goal declared for this directory",
     )
     p.add_argument("--all", action="store_true", help="list: show all sessions (no row limit)")
     p.add_argument("--limit", type=int, default=50, metavar="N", help="list: max rows to show (default 50)")
@@ -273,6 +285,37 @@ def _run(argv=None) -> int:
             sys.stdout.write(out)
         if err:
             sys.stderr.write(err)
+        return 0
+
+    # A flag whose command is not on the line is a typo, not a no-op: silence
+    # here would read as "cleared" to the person who typed it.
+    if args.clear and args.command != "goal":
+        print("agentlog: --clear belongs to 'goal' (got '{}')\n"
+              "  try: agentlog goal --clear".format(args.command),
+              file=sys.stderr)
+        return 2
+
+    # ---- 'goal' command ----
+    # Declared where you stand: goals are keyed by the current directory,
+    # which is also what a hook payload's `cwd` names at resume.
+    if args.command == "goal":
+        cwd = os.getcwd()
+        if args.clear:
+            if args.arg is not None:
+                print("agentlog: 'goal --clear' takes no text (got '{}')\n"
+                      "  clearing forgets the goal; declaring replaces it"
+                      .format(args.arg), file=sys.stderr)
+                return 2
+            print(clear_goal(cwd, home_dir))
+            return 0
+        if args.arg is None:
+            print(show_goal(cwd, home_dir))
+            return 0
+        message, complaint = declare_goal(args.arg, cwd, home_dir)
+        if complaint:
+            print("agentlog: {}".format(complaint), file=sys.stderr)
+            return 2
+        print(message)
         return 0
 
     # --brief is prose and the others are documents; asking for both means one
