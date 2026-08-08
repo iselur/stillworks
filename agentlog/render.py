@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from . import clock
+from .asked import pick_ask
 from .clock import how_long, when
 from .parser import active_spans
 from .terminal import block as safe_for_terminal
@@ -367,6 +368,88 @@ def compaction_note(sessions: List[Dict]) -> str:
 # not a question anybody has.
 # ---------------------------------------------------------------------------
 
+#: A session whose start would not parse still has to sort somewhere, and the
+#: front is where an unknown belongs when the list is oldest-first.
+_EPOCH_UTC = datetime(1970, 1, 1, tzinfo=timezone.utc)
+
+
+def _quoted(text: str, width: int) -> str:
+    """`text` in quotes, the pair of them fitting `width` cells.
+
+    The quotes are part of the row.  Cutting the text to the row's width and
+    *then* putting quotes round it gives a row two cells too wide, which is the
+    whole of the bug this exists to not have: every other row in the digest is
+    measured, and a row that overflows breaks the shape of the block it is in.
+    """
+    if width < 3:
+        return ""
+    return '"' + shortened(text, width - 2) + '"'
+
+
+def _ended(row: str, room: int) -> str:
+    """`row` marked as cut and shut with its closing quote, still inside `room`.
+
+    The mark and the quote are two more cells on a row that is already full, so
+    the row is cut again to make space for them rather than allowed to grow by
+    two.  `shortened` writes the mark itself when it has to cut, and a row
+    ending in two of them is two tools both saying they trimmed it -- so what it
+    wrote is taken off before the pair this row needs goes on.
+    """
+    tail = _CUT + '"'
+    kept = shortened(row, max(room - display_width(tail), 1))
+    return kept.rstrip(_CUT).rstrip(" ,;:-") + tail
+
+
+def _quoted_block(text: str, label: str, width: int, lines_max: int = 2) -> List[str]:
+    """A quoted sentence over up to `lines_max` rows, hanging off `label`.
+
+    One row holds about eight words, and eight words into "fix all, and do
+    additional extensive testing of all commands" the sentence has not reached
+    the verb.  This is the row the digest exists for, so it is the one row
+    allowed a second line -- and only a second, because a digest that lets a
+    prompt run to a paragraph is a transcript with a header.
+
+    Wrapped on words; a single word wider than the row is cut by `shortened`
+    rather than allowed to overflow, since there is nothing else to do with it.
+    """
+    room = width - display_width(label)
+    if room < 6:
+        return []
+    body = '"' + text + '"'
+    rows: List[str] = []
+    current = ""
+    dropped = False
+    for word in body.split(" "):
+        candidate = word if not current else current + " " + word
+        if display_width(candidate) <= room:
+            current = candidate
+            continue
+        if len(rows) == lines_max - 1:
+            # No row left to move this word onto, so what gets cut is the rest
+            # of the sentence rather than this one word.
+            dropped = True
+            break
+        if current:
+            rows.append(current)
+            current = word
+        else:
+            # One word wider than the whole row: there is nothing to do with it
+            # but cut it, and nowhere else for the cut to happen.
+            rows.append(shortened(word, room))
+            current = ""
+    if current and len(rows) < lines_max:
+        rows.append(current)
+    if not rows:
+        return []
+    # A sentence that opens a quote and never shuts it reads as output that
+    # stopped rather than as a sentence somebody trimmed, so the last row is
+    # closed either way -- and only re-cut when there was something left over.
+    if dropped or not rows[-1].endswith('"'):
+        rows[-1] = _ended(rows[-1], room)
+    pad = " " * display_width(label)
+    return [label + rows[0]] + [pad + r for r in rows[1:]]
+
+
 def group_by_project(sessions: List[Dict]) -> List[Dict]:
     """Aggregate sessions into per-project groups, busiest first."""
     groups: Dict[str, List[Dict]] = {}
@@ -400,6 +483,15 @@ def group_by_project(sessions: List[Dict]) -> List[Dict]:
                 "errors": sum(s["errors"] for s in members),
                 "top_files": sorted(writes, key=lambda f: (-writes[f], f)),
                 "top_failed": sorted(failed.items(), key=lambda kv: (-kv[1], kv[0])),
+                # Oldest session first: what a project was for is said at the
+                # start of the day's work on it, not at the end.  `members` is
+                # in whatever order the sessions arrived, so it is sorted here
+                # rather than trusted.
+                "asked": pick_ask([
+                    pick_ask(s.get("asks") or [])
+                    for s in sorted(members,
+                                    key=lambda s: (s["start"] or _EPOCH_UTC))
+                ]),
             }
         )
     out.sort(key=lambda g: (-g["seconds"], g["name"]))
@@ -495,6 +587,13 @@ def render_digest(
             f"  {_pad(shortened(g['name'], name_w), name_w)}  "
             f"{clock.duration(g['seconds']).rjust(dur_w)}   " + " · ".join(stats)
         )
+
+        # Before the files and the failures, because it is what they were for.
+        # A reader who stops after this row has still had their question
+        # answered; one who stops after `edited` has a list of filenames.
+        if g["asked"]:
+            lines.extend(_quoted_block(
+                g["asked"], "      asked    ", _DIGEST_WIDTH))
 
         if g["top_files"]:
             files = g["top_files"][:3]
@@ -607,6 +706,10 @@ def _render_session_text(
     turns = s["user_turns"]
     lines.append(f"    {time_range}  ({duration})  "
                  f"{turns} turn{'' if turns == 1 else 's'}")
+
+    ask = pick_ask(s.get("asks") or [])
+    if ask:
+        lines.append(f"    asked: {_quoted(ask, _DIGEST_WIDTH - 11)}")
 
     if s["models"]:
         lines.append(f"    model: {', '.join(s['models'])}")
@@ -732,6 +835,13 @@ def render_show(s: Dict) -> str:
     lines.append(f"session  {_one_row(str(s['id']))}")
     lines.append(f"source   {_one_row(str(s.get('source', '?')))}")
     lines.append(f"project  {_one_row(str(s['project'] or '?'))}")
+    # Up here with the identity of the session rather than down with its
+    # contents: what it was asked for is the same kind of fact as which project
+    # it ran in, and the reader wanting the detail view is the reader who could
+    # not tell from the digest which session this was.
+    ask = pick_ask(s.get("asks") or [])
+    if ask:
+        lines.append(f"asked    {_one_row(ask)}")
     lines.append(f"start    {clock.at(s['start'])}")
     lines.append(f"end      {clock.at(s['end'])}")
     # The time it spent working, and -- when they differ -- the time it was
@@ -808,6 +918,12 @@ def render_markdown(sessions: List[Dict]) -> str:
             group["files"], group["commands"], group["errors"]))
         lines.append(f"## {group['name']}")
         lines.append("")
+        if group["asked"]:
+            # A blockquote, and flattened onto one line: a prompt with a blank
+            # line in it would end the quote and drop the rest into the body,
+            # and one with a ``` in it would take the document with it.
+            lines.append(f"> {_one_row(group['asked'])}")
+            lines.append("")
         lines.append(" · ".join(stats))
         lines.append("")
 
@@ -879,6 +995,10 @@ def _session_for_json(s: Dict) -> Dict:
     # exactly the mistake the text output stopped making.  Say the working time
     # too, under its own name, so a script does not have to add up the spans.
     out["active_s"] = clock.working_seconds(s)
+    # `asks` is the few prompts that were kept; `asked` is the one of them that
+    # names the work.  Both go out: a script that wants to choose differently
+    # should not have to re-read the transcript to do it.
+    out["asked"] = pick_ask(s.get("asks") or [])
     # A named pair rather than a bare tuple: a script reading the one field
     # here that is meant for a person should not have to know which end of a
     # list the sentence is on.

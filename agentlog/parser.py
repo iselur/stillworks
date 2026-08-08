@@ -15,6 +15,8 @@ end           datetime | None — last timestamp seen
 duration_s    float | None    — (end - start).total_seconds(), or None
 models        list[str]       — unique model names observed
 user_turns    int             — number of user-turn records
+asks          list[str]       — the first few prompts somebody typed, cleaned;
+                                `asked.pick_ask` chooses which one is the goal
 files_read    list[str]       — file paths from Read tool calls
 files_written list[str]       — file paths from Write/Edit/MultiEdit and
                                 NotebookEdit calls, and from Codex
@@ -42,6 +44,7 @@ import stat
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
+from . import asked
 from .transcript import (
     decode_claude_project,
     files_a_command_reads,
@@ -82,6 +85,24 @@ def _obj(value) -> Dict:
 def _items(value) -> List:
     """A field that ought to be a list, as a list."""
     return value if isinstance(value, list) else []
+
+
+def _typed_text(content) -> str:
+    """The words out of a `user` record's content, whatever shape it arrived in.
+
+    Claude Code writes the content of a message as a bare string on some
+    records and as a list of parts on others, and a person's own words are the
+    ``text`` parts of the second.  Only ``text`` -- an image part carries a
+    filename and a ``tool_result`` carries whatever a command printed, and
+    neither is something anybody typed.
+    """
+    if isinstance(content, str):
+        return content
+    return "\n".join(
+        _text(item.get("text"))
+        for item in _items(content)
+        if isinstance(item, dict) and item.get("type") == "text"
+    )
 
 
 def _count(value) -> int:
@@ -248,6 +269,7 @@ def _empty_session(session_id: str, source: str) -> Dict:
         "duration_s": None,
         "models": [],
         "user_turns": 0,
+        "asks": [],
         "files_read": [],
         "files_written": [],
         "commands": [],
@@ -438,6 +460,11 @@ def parse_claude_session(
                 continue
             s["user_turns"] += 1
             s["events"].append((ts, "turn", ""))
+            # Everything above has already settled that this record is a person
+            # typing rather than the agent feeding itself, which is the whole
+            # of the difficulty -- so the goal of the session is simply the
+            # text of it, and is taken here rather than worked out again later.
+            asked.keep(s["asks"], asked.the_ask(_typed_text(msg.get("content"))))
 
         elif record_type == "assistant":
             msg = _obj(obj.get("message"))
@@ -611,6 +638,8 @@ def parse_codex_session(path: str) -> Optional[Dict]:
             if pt == "user_message":
                 s["user_turns"] += 1
                 s["events"].append((ts, "turn", ""))
+                asked.keep(s["asks"],
+                           asked.the_ask(_text(payload.get("message"))))
             elif pt == "patch_apply_end":
                 saw_patch_end = True
                 # The only record that says which files a patch actually
@@ -878,6 +907,7 @@ def _merge_sessions(group: List[Dict]) -> Dict:
     merged["failed_cmds"] = []
     merged["compactions"] = []
     merged["write_counts"] = {}
+    merged["asks"] = []
     merged["user_turns"] = 0
     merged["errors"] = 0
     merged["skipped_lines"] = 0
@@ -890,6 +920,10 @@ def _merge_sessions(group: List[Dict]) -> Dict:
         merged["files_written"].extend(s["files_written"])
         merged["commands"].extend(s["commands"])
         merged["failed_cmds"].extend(s["failed_cmds"])
+        # `ordered` is oldest first, so the first ask in the merged list is the
+        # first anybody typed -- which is the one that names the work.
+        for ask in s.get("asks") or []:
+            asked.keep(merged["asks"], ask)
         # Concatenated, not unioned: two workers that both had to compact are
         # two compactions, and each one really cost its own time.
         merged["compactions"].extend(s.get("compactions") or [])

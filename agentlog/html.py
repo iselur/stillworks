@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 
 from . import __version__
+from .asked import pick_ask
 from .clock import duration, how_long, when
 from .render import (
     _fmt_tokens,
@@ -177,8 +178,24 @@ body {
   color: var(--muted);
   margin-bottom: 0.3rem;
 }
-/* The recap is prose, not a path — set as prose, and left of a rule so it
-   reads as the card's own summary rather than as one more list. */
+/* What somebody typed, quoted.  Same rule-on-the-left as the recap because it
+   is the same kind of thing — a sentence about the work rather than a list of
+   it — but in the body ink rather than muted: on a card whose other rows are
+   paths and counts, this is the row a reader is looking for. */
+.asked {
+  margin-top: 0.75rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--tag-bg);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
+.project-asked {
+  margin: 0.15rem 0 0.6rem;
+  padding-left: 0.7rem;
+  border-left: 2px solid var(--tag-bg);
+  font-size: 0.9rem;
+  line-height: 1.55;
+}
 .recap {
   margin-top: 0.75rem;
   padding-left: 0.7rem;
@@ -285,8 +302,13 @@ def _render_card(s: Dict, shorts: Optional[Dict[str, str]] = None) -> str:
     # Sections
     sections = ""
 
-    # First, above the paths: the one part of a card that says what the
-    # session was *for*.  `_e` escapes it like everything else here — the text
+    # Above everything: what was asked for.  A card is a list of what happened;
+    # this is the one row saying what it was all meant to do, so it goes first.
+    ask = pick_ask(s.get("asks") or [])
+    if ask:
+        sections += _tag("div", _e(f'"{ask}"'), class_="asked")
+
+    # Then the recap.  `_e` escapes it like everything else here — the text
     # was written by the thing being reported on.
     for _at, text in s.get("recaps") or []:
         sections += _tag("div", _e(str(text)), class_="recap")
@@ -335,6 +357,8 @@ def _render_project(group: Dict, shorts: Optional[Dict[str, str]] = None) -> str
     if group["path"] and group["path"] != group["name"]:
         header_parts.append(_tag("span", _e(group["path"]), class_="project-path"))
     header = _tag("div", " ".join(header_parts), class_="project-header")
+    if group["asked"]:
+        header += _tag("div", _e(f'"{group["asked"]}"'), class_="project-asked")
 
     cards = "\n".join(_render_card(s, shorts) for s in group["sessions"])
     return _tag("div", header + cards, class_="project")
@@ -378,8 +402,9 @@ def render_html(
     )
 
     privacy_note = (
-        "<p>This digest may contain file paths, shell commands, and the "
-        "recaps the agent wrote of what it was asked to do. "
+        "<p>This digest may contain file paths, shell commands, the recaps "
+        "the agent wrote, and what you typed to ask for the work. "
+        "Nothing the agent replied and nothing a command printed is in here. "
         "Review before sharing.</p>"
     )
     footer = _tag(
