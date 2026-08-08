@@ -45,6 +45,7 @@ from typing import Dict, List, Optional, Tuple
 
 from . import __version__
 from .brief import render_brief
+from .handover import handle as handle_hook
 from .parser import find_sessions, read_one_session
 from .render import (
     render_digest,
@@ -141,6 +142,7 @@ def _build_parser() -> argparse.ArgumentParser:
             "  agentlog list\n"
             "  agentlog today --html digest.html\n"
             "  agentlog week --json\n"
+            "  agentlog handover        (run by an agent hook, not by you)\n"
         ),
     )
     p.add_argument("--version", action="version", version=f"agentlog {__version__}")
@@ -150,7 +152,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="today",
         metavar="COMMAND",
         help="today | yesterday | week | since DATE | on DAY | show ID | list "
-             "(default: today)",
+             "| handover (default: today)",
     )
     p.add_argument(
         "arg",
@@ -249,6 +251,29 @@ def _run(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # 'handover' is not a way of looking at the logs, so it is answered before
+    # any of the flags that say how to look at them.  Its whole input is the
+    # hook payload on standard input, and its exit code is 0 whatever happens:
+    # an agent must not be stopped by a problem with its own note-taking.
+    if args.command == "handover":
+        # Typed at a terminal there is no payload coming, and a read on a
+        # keyboard never returns: the command would look like it had hung,
+        # which is the one impression a note-taker must not leave.  Say what
+        # it is for instead.  Exit 2, like any other usage mistake -- a hook
+        # never reaches this branch, so the promise above is untouched.
+        if sys.stdin.isatty():
+            print("agentlog handover is run by an agent hook, not by hand: it\n"
+                  "reads a hook's JSON payload on standard input.  See 'The "
+                  "note a\nsession leaves itself' in the README for the two "
+                  "lines to add to\n~/.claude/settings.json.", file=sys.stderr)
+            return 2
+        out, err = handle_hook(sys.stdin.read(), home_dir)
+        if out:
+            sys.stdout.write(out)
+        if err:
+            sys.stderr.write(err)
+        return 0
 
     # --brief is prose and the others are documents; asking for both means one
     # of them was a mistake, and guessing which would print the wrong one.
