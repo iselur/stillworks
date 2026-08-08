@@ -15,6 +15,9 @@ View flags (time commands)
   --project NAME                 # only projects matching NAME
 
 Output flags (may be combined with any time command)
+  --brief                        # a written report: what you worked on, what
+                                 #   is done, what is not.  This one asks a
+                                 #   model, so it sends your day off the box.
   --html FILE                    # write self-contained HTML digest
   --md [FILE]                    # Markdown (to FILE or stdout)
   --json                         # machine-readable JSON
@@ -41,6 +44,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Dict, List, Optional, Tuple
 
 from . import __version__
+from .brief import render_brief
 from .parser import find_sessions
 from .render import (
     render_digest,
@@ -169,6 +173,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--json", action="store_true", help="print JSON to stdout")
     p.add_argument(
+        "--brief",
+        action="store_true",
+        help="a written report of what got done and what did not "
+             "(asks a model; sends the day off this machine)",
+    )
+    p.add_argument(
         "--sessions",
         action="store_true",
         help="list every session instead of the per-project digest",
@@ -233,6 +243,29 @@ def _run(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
+
+    # --brief is prose and the others are documents; asking for both means one
+    # of them was a mistake, and guessing which would print the wrong one.
+    if args.brief:
+        also = [flag for flag, on in (("--html", bool(args.html)),
+                                      ("--md", args.md is not None),
+                                      ("--json", args.json),
+                                      ("--sessions", args.sessions)) if on]
+        if also:
+            print(
+                "agentlog: --brief cannot be combined with {}\n"
+                "  --brief writes a report to read; the others write a "
+                "document to keep.".format(" or ".join(also)),
+                file=sys.stderr,
+            )
+            return 2
+        if args.command in ("list", "show"):
+            print(
+                "agentlog: --brief is not supported for '{}'; use a time "
+                "command (today, week, since ...) instead".format(args.command),
+                file=sys.stderr,
+            )
+            return 2
 
     if args.limit < 1:
         print(
@@ -387,6 +420,10 @@ def _run(argv=None) -> int:
             print(f"no sessions found for: {when}")
             if args.verbose:
                 print(f"  searched {len(sessions)} total sessions")
+        elif args.brief:
+            print(render_brief(filtered, period_label), end="")
+            _note_unusable(unusable, args.verbose)
+            return 0
         elif args.sessions:
             print(render_text(filtered, verbose=args.verbose))
         else:

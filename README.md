@@ -144,10 +144,10 @@ trust the merge. (`report` without `-o` prints to stdout.) All commands take
 
 ```
 $ stillworks tools
-  stillworks  0.2.1  record what your code does now, catch when it changes
+  stillworks  0.3.0  record what your code does now, catch when it changes
   unedit      0.1.5  a safety net for letting an agent loose on your files
   agentdiff   0.1.4  see what the agent actually changed, before you merge
-  agentlog    0.3.0  what did your coding agent actually do today?
+  agentlog    0.4.0  what did your coding agent actually do today?
   agentwatch  0.1.0  tail what your agent is doing, right now
 
   all five installed
@@ -275,18 +275,22 @@ didn't intend, on code that has nothing else guarding it.**
 ## Part of a small family
 
 Five tools for working with coding agents, same house style: zero
-dependencies, MIT, no API key, nothing leaves your machine. None of them
-call a model — that is the point, since the thing being checked already is
-one.
+dependencies, MIT, no API key, nothing leaves your machine. One command is the
+exception and says so on its own help line: `agentlog --brief` hands the day's
+evidence to the `claude` command already installed on your machine, because
+naming what a day's work was is a judgement and there is no arithmetic for it.
+Everything else here reads files and prints.
 
-Each of those four claims is a test rather than a promise, in
+Each of those claims is a test rather than a promise, in
 `tests/test_family_claims.py`, and since 0.2.0 the whole family ships in this
 one distribution, so the tests scan all five packages: every import resolves to
 the standard library or to the package's own modules, nothing that can open a
 socket is imported, no environment variable that looks like a credential is
-read, and no model SDK or provider hostname appears anywhere. A claim repeated
-in five READMEs and checked in none of them would read as five agreements when
-it was one assertion.
+read, and no model SDK or provider hostname appears anywhere. The exception is
+held to one file the same way — `agentlog/asking_a_model.py` is the only module
+in the wheel allowed to so much as name an agent command, and the tests fail if
+a second one ever does. A claim repeated in five READMEs and checked in none of
+them would read as five agreements when it was one assertion.
 
 Two of those checks are shaped by what stillworks does. It is the one tool here
 that must import a module by name at run time — that is what `lock` is — so

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stillworks"
-version = "0.2.1"
+version = "0.3.0"
 description = "Five small tools for working with coding agents: snapshot your code's behavior, undo agent edits, review agent diffs, read agent logs, watch an agent live. One install, zero dependencies."
 readme = "README.md"
 license = { text = "MIT" }

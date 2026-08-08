@@ -87,10 +87,33 @@ CREDENTIAL_MARKERS = ("API_KEY", "APIKEY", "SECRET", "TOKEN", "PASSWORD",
 # re-wrap does not read as a retraction.
 FAMILY_BLURB = (
     "Five tools for working with coding agents, same house style: zero "
-    "dependencies, MIT, no API key, nothing leaves your machine. None of them "
-    "call a model — that is the point, since the thing being checked already "
-    "is one."
+    "dependencies, MIT, no API key, nothing leaves your machine. One command "
+    "is the exception and says so on its own help line: `agentlog --brief` "
+    "hands the day's evidence to the `claude` command already installed on "
+    "your machine, because naming what a day's work was is a judgement and "
+    "there is no arithmetic for it. Everything else here reads files and "
+    "prints."
 )
+
+# Running another program is not the line -- agentdiff runs `git` and
+# stillworks runs the module under test in a child.  Running an *agent* is.
+# These are the command names a package would reach for to get a model on the
+# phone without importing an SDK or naming a host, which is how the exception
+# was actually built and so how a second one would arrive.
+MODEL_COMMANDS = ("claude", "codex", "gemini", "ollama", "llm", "aichat")
+MAY_RUN_A_MODEL = os.path.join("agentlog", "asking_a_model.py")
+
+
+_CHILD_PROCESS = {
+    "run", "Popen", "call", "check_call", "check_output", "system", "popen",
+    "spawnl", "spawnv", "spawnvp", "spawnlp", "execv", "execvp", "execl",
+}
+
+
+def _is_a_child_process(fn):
+    """Does this call start another program?"""
+    return (getattr(fn, "attr", None) in _CHILD_PROCESS
+            or getattr(fn, "id", None) in _CHILD_PROCESS)
 
 
 def sources():
@@ -317,7 +340,45 @@ class TestNoAPIKey(unittest.TestCase):
 
 
 class TestNoneOfThemCallAModel(unittest.TestCase):
-    """The claim the whole family rests on."""
+    """The claim the whole family rests on, and the one exception to it."""
+
+    def test_only_the_one_named_module_can_both_name_an_agent_and_run_one(self):
+        # The exception was built by running the `claude` binary already on the
+        # machine -- no SDK, no hostname, so the two tests below would both
+        # pass on a package that had quietly grown a second one.
+        #
+        # Reading the argv of each call would miss it: the real module runs
+        # `[exe, "-p"]`, and `exe` is a variable, so the one instance this
+        # exists to confine is invisible to that check.  What is visible is the
+        # pair -- a module that can start a program *and* writes an agent's
+        # name down somewhere.  Neither half alone is the tell.  agentlog's
+        # parser says "claude" because it reads Claude's logs and has to call
+        # them something; agentdiff runs `git` and stillworks runs the module
+        # under test, and neither knows any agent's name.
+        for package, path in sources():
+            where = os.path.join(package, os.path.relpath(
+                path, os.path.join(_ROOT, package)))
+            if where == MAY_RUN_A_MODEL:
+                continue
+            with open(path, encoding="utf-8") as fh:
+                tree = ast.parse(fh.read(), path)
+            if not any(_is_a_child_process(n.func)
+                       for n in ast.walk(tree) if isinstance(n, ast.Call)):
+                continue
+            for text, lineno in string_constants(path):
+                self.assertNotIn(
+                    os.path.basename(text.strip().split(" ")[0]),
+                    MODEL_COMMANDS,
+                    "{}:{} can start a program and names {!r}; only {} may "
+                    "do both".format(where, lineno, text[:40], MAY_RUN_A_MODEL))
+
+    def test_the_one_module_that_may_is_still_there_to_be_confined(self):
+        # A package that lost the file would pass the test above by having
+        # nothing to exempt, and the claim would go quiet instead of failing.
+        self.assertTrue(
+            os.path.exists(os.path.join(_ROOT, MAY_RUN_A_MODEL)),
+            "{} is gone -- the exception above now guards nothing".format(
+                MAY_RUN_A_MODEL))
 
     def test_no_model_sdk_is_imported(self):
         for package, path in sources():
